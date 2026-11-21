@@ -17,10 +17,6 @@ import { TradeInView } from './components/TradeInView';
 import { WarrantyCardModal } from './components/WarrantyCardModal';
 import { WishlistView } from './components/WishlistView';
 import {
-  INITIAL_PRODUCTS,
-  INITIAL_REVIEWS,
-  INITIAL_STORES,
-  INITIAL_TRACKING_RECORDS,
   getCityCoordinates,
 } from './data/catalog';
 import {
@@ -100,12 +96,11 @@ export default function App() {
   const [conditionFilter, setConditionFilter] = useState<ConditionFilter>('all');
   const [justRegisteredCustomer, setJustRegisteredCustomer] = useState(false);
 
-  const [stores, setStores] = useState<StoreProfile[]>(INITIAL_STORES);
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
-  const [trackingRecords, setTrackingRecords] = useState<TrackingRecord[]>(
-    INITIAL_TRACKING_RECORDS
-  );
-  const [reviews, setReviews] = useState<VerifiedReview[]>(INITIAL_REVIEWS);
+  const [stores, setStores] = useState<StoreProfile[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [trackingRecords, setTrackingRecords] = useState<TrackingRecord[]>([]);
+  const [reviews, setReviews] = useState<VerifiedReview[]>([]);
+  const [liveDataLoaded, setLiveDataLoaded] = useState(false);
   const [wishlistItems, setWishlistItems] = useState<WishlistItem[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [tradeIns, setTradeIns] = useState<TradeInRequest[]>([]);
@@ -170,10 +165,13 @@ export default function App() {
       setProducts(storesRes.products);
       if (storesRes.reviews) setReviews(storesRes.reviews);
       setTrackingRecords(trackingRes.records);
+      setLiveDataLoaded(true);
     } catch {
-      // Keep initial fallback state if server is momentarily unavailable
+      // Server unavailable (e.g. static hosting) — start with empty data,
+      // Firestore live listeners will populate if configured.
+      setLiveDataLoaded(true);
     }
-  }, []);
+  }, [setLiveDataLoaded]);
 
   useEffect(() => {
     const boot = async () => {
