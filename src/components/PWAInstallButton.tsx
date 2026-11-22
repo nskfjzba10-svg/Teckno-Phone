@@ -3,7 +3,7 @@ import { Download, MoreVertical, Share, Smartphone, X } from 'lucide-react';
 import { usePWAInstall } from '../hooks/usePWAInstall';
 
 interface PWAInstallButtonProps {
-  variant?: 'header' | 'card';
+  variant?: 'header' | 'card' | 'drawer';
   className?: string;
 }
 
@@ -22,7 +22,6 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
     if (isInstallable) {
       const accepted = await install();
       if (!accepted) {
-        // User dismissed or cancelled; no extra modal needed
         return;
       }
       return;
@@ -30,27 +29,30 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
     setShowGuideModal(true);
   };
 
+  const buttonClasses =
+    variant === 'drawer'
+      ? `w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/60 text-blue-800 dark:text-blue-200 hover:bg-blue-100 dark:hover:bg-blue-900/70 transition-colors cursor-pointer min-h-[44px] whitespace-nowrap ${className}`
+      : variant === 'card'
+        ? `inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/60 text-blue-800 dark:text-blue-200 hover:bg-blue-100 dark:hover:bg-blue-900/70 transition-colors cursor-pointer min-h-[44px] whitespace-nowrap shrink-0 ${className}`
+        : `inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/60 text-blue-800 dark:text-blue-200 hover:bg-blue-100 dark:hover:bg-blue-900/70 transition-colors cursor-pointer min-h-[40px] whitespace-nowrap shrink-0 ${className}`;
+
   return (
     <>
       <button
         type="button"
         onClick={handleClick}
         title="تثبيت تكنو فون على الشاشة الرئيسية"
-        className={
-          variant === 'card'
-            ? `inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/60 text-blue-800 dark:text-blue-200 hover:bg-blue-100 dark:hover:bg-blue-900/70 transition-colors cursor-pointer min-h-[44px] whitespace-nowrap shrink-0 ${className}`
-            : `inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/60 text-blue-800 dark:text-blue-200 hover:bg-blue-100 dark:hover:bg-blue-900/70 transition-colors cursor-pointer min-h-[40px] whitespace-nowrap shrink-0 ${className}`
-        }
+        className={buttonClasses}
       >
         <Download className="w-4 h-4 shrink-0" />
-        <span className={variant === 'card' ? '' : 'hidden sm:inline'}>
-          تثبيت التطبيق
+        <span className={variant === 'header' ? 'hidden sm:inline' : ''}>
+          {variant === 'drawer' ? 'تثبيت التطبيق على الشاشة الرئيسية' : 'تثبيت التطبيق'}
         </span>
       </button>
 
       {showGuideModal && (
         <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4"
+          className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4"
           onClick={() => setShowGuideModal(false)}
         >
           <div
