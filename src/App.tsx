@@ -22,14 +22,26 @@ import {
 import {
   apiRequest,
   getAuthToken,
+  isBackendUnavailable,
   setAuthToken,
   submitVerifiedReviewApi,
 } from './lib/api';
 import {
+  FIREBASE_DIRECT_TOKEN,
+  createReviewInFirestore,
+  createTradeInDirectInFirestore,
+  fetchCustomerExtrasFromFirestore,
+  fetchMarketplaceFromFirestore,
+  isDirectFirebaseSession,
+  markAllNotificationsReadInFirestore,
+  markNotificationReadInFirestore,
+  respondTradeInInFirestore,
+  restoreFirebaseSession,
   signOutFirebase,
   syncBookingToFirestore,
   syncReviewToFirestore,
   syncTradeInToFirestore,
+  toggleWishlistInFirestore,
 } from './lib/cloudSync';
 import {
   AuthUser,
@@ -130,53 +142,120 @@ export default function App() {
     }
   }, [cart]);
 
-  const loadCustomerExtras = useCallback(async () => {
-    if (!getAuthToken()) {
-      setWishlistItems([]);
-      setNotifications([]);
-      setTradeIns([]);
-      return;
-    }
-    try {
-      const [wishRes, notifRes, tradeRes] = await Promise.all([
-        apiRequest<{ items: WishlistItem[] }>('/api/wishlist'),
-        apiRequest<{ notifications: NotificationItem[] }>('/api/notifications'),
-        apiRequest<{ tradeins: TradeInRequest[] }>('/api/tradeins'),
-      ]);
-      setWishlistItems(wishRes.items);
-      setNotifications(notifRes.notifications);
-      setTradeIns(tradeRes.tradeins);
-    } catch {
-      // Ignore transient load errors
-    }
-  }, []);
+  const loadCustomerExtras = useCallback(
+    async (explicitUid?: string) => {
+      const token = getAuthToken();
+      if (!token) {
+        setWishlistItems([]);
+        setNotifications([]);
+        setTradeIns([]);
+        return;
+      }
+      const targetUid = explicitUid || currentUser?.id;
+      if (isDirectFirebaseSession()) {
+        if (!targetUid) return;
+        try {
+          const extras = await fetchCustomerExtrasFromFirestore(targetUid);
+          setWishlistItems(extras.wishlistItems);
+          setNotifications(extras.notifications);
+          setTradeIns(extras.tradeIns);
+        } catch {
+          // Ignore transient load errors
+        }
+        return;
+      }
+      try {
+        const [wishRes, notifRes, tradeRes] = await Promise.all([
+          apiRequest<{ items: WishlistItem[] }>('/api/wishlist'),
+          apiRequest<{ notifications: NotificationItem[] }>('/api/notifications'),
+          apiRequest<{ tradeins: TradeInRequest[] }>('/api/tradeins'),
+        ]);
+        setWishlistItems(wishRes.items);
+        setNotifications(notifRes.notifications);
+        setTradeIns(tradeRes.tradeins);
+      } catch (err) {
+        if (isBackendUnavailable(err) && targetUid) {
+          try {
+            const extras = await fetchCustomerExtrasFromFirestore(targetUid);
+            setWishlistItems(extras.wishlistItems);
+            setNotifications(extras.notifications);
+            setTradeIns(extras.tradeIns);
+          } catch {
+            // Ignore transient load errors
+          }
+        }
+      }
+    },
+    [currentUser?.id]
+  );
 
-  const loadMarketplaceData = useCallback(async () => {
-    try {
-      const [storesRes, trackingRes] = await Promise.all([
-        apiRequest<{
-          stores: StoreProfile[];
-          products: Product[];
-          reviews?: VerifiedReview[];
-        }>('/api/stores'),
-        apiRequest<{ records: TrackingRecord[] }>('/api/tracking'),
-      ]);
-      setStores(storesRes.stores);
-      setProducts(storesRes.products);
-      if (storesRes.reviews) setReviews(storesRes.reviews);
-      setTrackingRecords(trackingRes.records);
-      setLiveDataLoaded(true);
-    } catch {
-      // Server unavailable (e.g. static hosting) — start with empty data,
-      // Firestore live listeners will populate if configured.
-      setLiveDataLoaded(true);
-    }
-  }, [setLiveDataLoaded]);
+  const loadMarketplaceData = useCallback(
+    async (explicitUid?: string) => {
+      const targetUid = explicitUid || currentUser?.id;
+      if (isDirectFirebaseSession()) {
+        try {
+          const fsData = await fetchMarketplaceFromFirestore(targetUid);
+          setStores(fsData.stores);
+          setProducts(fsData.products);
+          setReviews(fsData.reviews);
+          setTrackingRecords(fsData.bookings);
+        } catch {
+          // Ignore if unauthenticated or offline
+        } finally {
+          setLiveDataLoaded(true);
+        }
+        return;
+      }
+      try {
+        const [storesRes, trackingRes] = await Promise.all([
+          apiRequest<{
+            stores: StoreProfile[];
+            products: Product[];
+            reviews?: VerifiedReview[];
+          }>('/api/stores'),
+          apiRequest<{ records: TrackingRecord[] }>('/api/tracking'),
+        ]);
+        setStores(storesRes.stores);
+        setProducts(storesRes.products);
+        if (storesRes.reviews) setReviews(storesRes.reviews);
+        setTrackingRecords(trackingRes.records);
+        setLiveDataLoaded(true);
+      } catch (err) {
+        if (isBackendUnavailable(err)) {
+          try {
+            const fsData = await fetchMarketplaceFromFirestore(targetUid);
+            setStores(fsData.stores);
+            setProducts(fsData.products);
+            setReviews(fsData.reviews);
+            setTrackingRecords(fsData.bookings);
+          } catch {
+            // Server unavailable & unauthenticated yet — stay clean
+          }
+        }
+        setLiveDataLoaded(true);
+      }
+    },
+    [currentUser?.id]
+  );
 
   useEffect(() => {
     const boot = async () => {
       const token = getAuthToken();
-      if (token) {
+      let bootedUid: string | undefined;
+      if (token === FIREBASE_DIRECT_TOKEN) {
+        const fsSession = await restoreFirebaseSession();
+        if (fsSession) {
+          setCurrentUser(fsSession.user);
+          setOwnerStore(fsSession.store);
+          bootedUid = fsSession.user.id;
+          if (fsSession.user.role === 'customer') {
+            setCustomerView('products');
+            await loadCustomerExtras(fsSession.user.id);
+          }
+        } else {
+          setAuthToken(null);
+        }
+      } else if (token) {
         try {
           const me = await apiRequest<{
             user: AuthUser;
@@ -184,28 +263,47 @@ export default function App() {
           }>('/api/auth/me');
           setCurrentUser(me.user);
           setOwnerStore(me.store || null);
+          bootedUid = me.user.id;
           if (me.user.role === 'customer') {
             setCustomerView('products');
-            await loadCustomerExtras();
+            await loadCustomerExtras(me.user.id);
           }
-        } catch {
-          setAuthToken(null);
+        } catch (err) {
+          if (isBackendUnavailable(err)) {
+            const fsSession = await restoreFirebaseSession();
+            if (fsSession) {
+              setAuthToken(FIREBASE_DIRECT_TOKEN);
+              setCurrentUser(fsSession.user);
+              setOwnerStore(fsSession.store);
+              bootedUid = fsSession.user.id;
+              if (fsSession.user.role === 'customer') {
+                setCustomerView('products');
+                await loadCustomerExtras(fsSession.user.id);
+              }
+            } else {
+              setAuthToken(null);
+            }
+          } else {
+            setAuthToken(null);
+          }
         }
       }
       setAuthBooting(false);
-      await loadMarketplaceData();
+      await loadMarketplaceData(bootedUid);
     };
     boot();
-  }, [loadMarketplaceData, loadCustomerExtras]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Poll customer notifications every 15s for real-time stage/reply/price alerts
   useEffect(() => {
     if (!currentUser || currentUser.role !== 'customer') return;
     const timer = window.setInterval(() => {
-      loadCustomerExtras();
+      loadCustomerExtras(currentUser.id);
+      loadMarketplaceData(currentUser.id);
     }, 15000);
     return () => window.clearInterval(timer);
-  }, [currentUser, loadCustomerExtras]);
+  }, [currentUser, loadCustomerExtras, loadMarketplaceData]);
 
   const scrollToSection = (sectionId: string) => {
     const el = document.getElementById(sectionId);
@@ -236,10 +334,10 @@ export default function App() {
         setJustRegisteredCustomer(false);
         setCustomerView('products');
       }
-      loadCustomerExtras();
+      loadCustomerExtras(user.id);
     }
 
-    loadMarketplaceData();
+    loadMarketplaceData(user.id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -318,57 +416,83 @@ export default function App() {
   };
 
   const handleToggleWishlist = async (productId: string) => {
-    try {
-      const res = await apiRequest<{ items: WishlistItem[] }>(
-        '/api/wishlist/toggle',
-        {
-          method: 'POST',
-          body: JSON.stringify({ productId }),
-        }
-      );
-      setWishlistItems(res.items);
-    } catch {
-      // Fallback local toggle when unauthenticated
-      setWishlistItems((prev) => {
-        const exists = prev.some((w) => w.productId === productId);
-        if (exists) return prev.filter((w) => w.productId !== productId);
-        const prod = products.find((p) => p.id === productId);
-        if (!prod) return prev;
-        return [
+    const prod = products.find((p) => p.id === productId);
+    if (!isDirectFirebaseSession()) {
+      try {
+        const res = await apiRequest<{ items: WishlistItem[] }>(
+          '/api/wishlist/toggle',
           {
-            id: `wish-${productId}`,
-            customerId: currentUser?.id || 'guest',
-            productId,
-            storeId: prod.storeId,
-            savedPrice: prod.price,
-            notifyPriceDrop: true,
-            createdAt: 'الآن',
-          },
-          ...prev,
-        ];
-      });
+            method: 'POST',
+            body: JSON.stringify({ productId }),
+          }
+        );
+        setWishlistItems(res.items);
+        return;
+      } catch (err) {
+        if (!isBackendUnavailable(err)) {
+          // Local fallback toggle when unauthenticated
+        }
+      }
     }
+
+    if (prod && currentUser) {
+      try {
+        await toggleWishlistInFirestore(prod);
+      } catch {
+        // Ignore and toggle local state
+      }
+    }
+    setWishlistItems((prev) => {
+      const exists = prev.some((w) => w.productId === productId);
+      if (exists) return prev.filter((w) => w.productId !== productId);
+      if (!prod) return prev;
+      return [
+        {
+          id: `wish-${productId}`,
+          customerId: currentUser?.id || 'guest',
+          productId,
+          storeId: prod.storeId,
+          savedPrice: prod.price,
+          notifyPriceDrop: true,
+          createdAt: 'الآن',
+        },
+        ...prev,
+      ];
+    });
   };
 
   const handleMarkNotificationRead = async (id: string) => {
     setNotifications((prev) =>
       prev.map((n) => (n.id === id ? { ...n, read: true } : n))
     );
+    if (isDirectFirebaseSession()) {
+      await markNotificationReadInFirestore(id);
+      return;
+    }
     try {
       await apiRequest(`/api/notifications/${encodeURIComponent(id)}/read`, {
         method: 'PATCH',
       });
-    } catch {
-      // Ignore
+    } catch (err) {
+      if (isBackendUnavailable(err)) {
+        await markNotificationReadInFirestore(id);
+      }
     }
   };
 
   const handleMarkAllNotificationsRead = async () => {
+    const unreadIds = notifications.filter((n) => !n.read).map((n) => n.id);
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    if (isDirectFirebaseSession()) {
+      await markAllNotificationsReadInFirestore(unreadIds);
+      return;
+    }
     try {
       await apiRequest('/api/notifications/read-all', { method: 'POST' });
-    } catch {
-      // Ignore
+    } catch (err) {
+      if (isBackendUnavailable(err)) {
+        await markAllNotificationsReadInFirestore(unreadIds);
+      }
     }
   };
 
@@ -423,6 +547,12 @@ export default function App() {
   };
 
   const handleCreateBookingOrOrder = async (record: TrackingRecord) => {
+    if (isDirectFirebaseSession()) {
+      const created = (await syncBookingToFirestore(record)) || record;
+      setTrackingRecords((prev) => [created, ...prev]);
+      setActiveTicketId(created.id);
+      return;
+    }
     try {
       const res = await apiRequest<{ booking: TrackingRecord }>(
         '/api/bookings',
@@ -435,8 +565,9 @@ export default function App() {
       setActiveTicketId(res.booking.id);
       syncBookingToFirestore(res.booking);
     } catch {
-      setTrackingRecords((prev) => [record, ...prev]);
-      setActiveTicketId(record.id);
+      const created = (await syncBookingToFirestore(record)) || record;
+      setTrackingRecords((prev) => [created, ...prev]);
+      setActiveTicketId(created.id);
     }
   };
 
@@ -445,36 +576,106 @@ export default function App() {
     rating: number;
     comment: string;
   }) => {
-    const res = await submitVerifiedReviewApi(payload);
-    setReviews((prev) => [res.review, ...prev]);
-    setTrackingRecords((prev) =>
-      prev.map((r) => (r.id === res.booking.id ? res.booking : r))
-    );
-    syncReviewToFirestore(res.review);
-    loadMarketplaceData();
+    const runDirectFirestore = async () => {
+      const booking = trackingRecords.find((r) => r.id === payload.bookingId);
+      if (!booking || !currentUser) {
+        throw new Error('تعذر العثور على الطلب المكتمل لإرسال التقييم.');
+      }
+      const res = await createReviewInFirestore({
+        booking,
+        customerName: currentUser.name,
+        rating: payload.rating,
+        comment: payload.comment,
+      });
+      setReviews((prev) => [res.review, ...prev]);
+      setTrackingRecords((prev) =>
+        prev.map((r) => (r.id === res.booking.id ? res.booking : r))
+      );
+    };
+
+    if (isDirectFirebaseSession()) {
+      await runDirectFirestore();
+      return;
+    }
+
+    try {
+      const res = await submitVerifiedReviewApi(payload);
+      setReviews((prev) => [res.review, ...prev]);
+      setTrackingRecords((prev) =>
+        prev.map((r) => (r.id === res.booking.id ? res.booking : r))
+      );
+      syncReviewToFirestore(res.review);
+      loadMarketplaceData();
+    } catch (err) {
+      if (isBackendUnavailable(err)) {
+        await runDirectFirestore();
+        return;
+      }
+      throw err;
+    }
   };
 
   const handleSubmitTradeIn = async (payload: Partial<TradeInRequest>) => {
-    const res = await apiRequest<{ tradein: TradeInRequest }>('/api/tradeins', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-    setTradeIns((prev) => [res.tradein, ...prev]);
-    syncTradeInToFirestore(res.tradein);
+    const runDirectFirestore = async () => {
+      const targetStore = stores.find((s) => s.id === payload.storeId);
+      if (!targetStore) {
+        throw new Error('المتجر المحدد غير موجود.');
+      }
+      const created = await createTradeInDirectInFirestore(targetStore, payload);
+      setTradeIns((prev) => [created, ...prev]);
+    };
+
+    if (isDirectFirebaseSession()) {
+      await runDirectFirestore();
+      return;
+    }
+
+    try {
+      const res = await apiRequest<{ tradein: TradeInRequest }>('/api/tradeins', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setTradeIns((prev) => [res.tradein, ...prev]);
+      syncTradeInToFirestore(res.tradein);
+    } catch (err) {
+      if (isBackendUnavailable(err)) {
+        await runDirectFirestore();
+        return;
+      }
+      throw err;
+    }
   };
 
   const handleRespondTradeIn = async (
     id: string,
     status: 'accepted' | 'rejected'
   ) => {
-    const res = await apiRequest<{ tradein: TradeInRequest }>(
-      `/api/tradeins/${encodeURIComponent(id)}`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ status }),
+    if (isDirectFirebaseSession()) {
+      await respondTradeInInFirestore(id, { status });
+      setTradeIns((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, status } : t))
+      );
+      return;
+    }
+    try {
+      const res = await apiRequest<{ tradein: TradeInRequest }>(
+        `/api/tradeins/${encodeURIComponent(id)}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ status }),
+        }
+      );
+      setTradeIns((prev) => prev.map((t) => (t.id === id ? res.tradein : t)));
+    } catch (err) {
+      if (isBackendUnavailable(err)) {
+        await respondTradeInInFirestore(id, { status });
+        setTradeIns((prev) =>
+          prev.map((t) => (t.id === id ? { ...t, status } : t))
+        );
+        return;
       }
-    );
-    setTradeIns((prev) => prev.map((t) => (t.id === id ? res.tradein : t)));
+      throw err;
+    }
   };
 
   const handleTrackByCode = (code: string) => {

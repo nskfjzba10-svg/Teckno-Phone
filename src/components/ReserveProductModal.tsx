@@ -6,7 +6,8 @@ import {
   formatCurrency,
   getGovernorateDistricts,
 } from '../data/catalog';
-import { apiRequest } from '../lib/api';
+import { apiRequest, isBackendUnavailable } from '../lib/api';
+import { isDirectFirebaseSession } from '../lib/cloudSync';
 import {
   AuthUser,
   Product,
@@ -117,7 +118,24 @@ export const ReserveProductModal: React.FC<ReserveProductModalProps> = ({
     if (!promoInput.trim()) return;
     setPromoLoading(true);
     setPromoMsg('');
+    const validateLocally = () => {
+      const code = promoInput.trim().toUpperCase();
+      const matched = (store?.promoCodes || []).find(
+        (p) => p.active && p.code.toUpperCase() === code
+      );
+      if (matched) {
+        setAppliedPromo(matched);
+        setPromoMsg(`تم تطبيق خصم ${matched.discountPercent}%`);
+      } else {
+        setAppliedPromo(null);
+        setPromoMsg('كود الخصم غير صالح');
+      }
+    };
     try {
+      if (isDirectFirebaseSession()) {
+        validateLocally();
+        return;
+      }
       const res = await apiRequest<{ promo: PromoCode }>('/api/promo-validate', {
         method: 'POST',
         body: JSON.stringify({
@@ -128,6 +146,10 @@ export const ReserveProductModal: React.FC<ReserveProductModalProps> = ({
       setAppliedPromo(res.promo);
       setPromoMsg(`تم تطبيق خصم ${res.promo.discountPercent}%`);
     } catch (err) {
+      if (isBackendUnavailable(err)) {
+        validateLocally();
+        return;
+      }
       setAppliedPromo(null);
       setPromoMsg(err instanceof Error ? err.message : 'كود الخصم غير صالح');
     } finally {

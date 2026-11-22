@@ -53,10 +53,40 @@ export function saveCustomerName(name: string): void {
   }
 }
 
+let backendMarkedUnavailable = false;
+
+export class BackendUnavailableError extends Error {
+  status: number;
+  constructor(message = 'Backend API unavailable', status = 404) {
+    super(message);
+    this.name = 'BackendUnavailableError';
+    this.status = status;
+  }
+}
+
+export function isBackendUnavailable(err: unknown): boolean {
+  if (err instanceof BackendUnavailableError) return true;
+  if (err instanceof TypeError) return true; // Network / offline / refused API call
+  if (err instanceof Error) {
+    const msg = err.message.toLowerCase();
+    return (
+      msg.includes('request failed (404)') ||
+      msg.includes('request failed (405)') ||
+      msg.includes('failed to fetch') ||
+      msg.includes('backend api unavailable')
+    );
+  }
+  return false;
+}
+
 export async function apiRequest<T>(
   url: string,
   options: RequestInit = {}
 ): Promise<T> {
+  if (backendMarkedUnavailable && url.startsWith('/api/')) {
+    throw new BackendUnavailableError('Backend API unavailable', 404);
+  }
+
   const token = getAuthToken();
   const headers = new Headers(options.headers || {});
   if (!headers.has('Content-Type') && options.body) {
@@ -66,9 +96,40 @@ export async function apiRequest<T>(
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const res = await fetch(url, { ...options, headers });
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+  let res: Response;
+  try {
+    res = await fetch(url, { ...options, headers });
+  } catch (err) {
+    throw new BackendUnavailableError(
+      err instanceof Error ? err.message : 'Network request failed',
+      0
+    );
+  }
+
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  const isJson = contentType.includes('application/json');
+  const data = isJson
+    ? ((await res.json().catch(() => ({}))) as T & { error?: string })
+    : ({} as T & { error?: string });
+
+  if (res.ok && !isJson) {
+    // Static SPA host rewrote /api/* to index.html
+    backendMarkedUnavailable = true;
+    throw new BackendUnavailableError('Static host returned HTML instead of API JSON', 404);
+  }
+
   if (!res.ok) {
+    const isAuthOrDirectoryRoute =
+      url.startsWith('/api/auth/') || url === '/api/stores';
+    if (
+      res.status === 405 ||
+      (res.status === 404 && (!data.error || isAuthOrDirectoryRoute || !isJson))
+    ) {
+      if (isAuthOrDirectoryRoute || !isJson) {
+        backendMarkedUnavailable = true;
+      }
+      throw new BackendUnavailableError(`Request failed (${res.status})`, res.status);
+    }
     throw new Error(data.error || `Request failed (${res.status})`);
   }
   return data;
@@ -131,18 +192,27 @@ export async function uploadMediaFile(
     ? await readImageFileAsDataUrl(file)
     : await readRawFileAsBase64DataUrl(file);
 
-  const res = await apiRequest<{ url: string; kind: 'image' | 'video' }>(
-    '/api/uploads',
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        filename: file.name,
-        mimeType: isImage ? 'image/jpeg' : file.type,
-        dataUrl,
-      }),
+  try {
+    const res = await apiRequest<{ url: string; kind: 'image' | 'video' }>(
+      '/api/uploads',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          filename: file.name,
+          mimeType: isImage ? 'image/jpeg' : file.type,
+          dataUrl,
+        }),
+      }
+    );
+    return res;
+  } catch (err) {
+    if (isBackendUnavailable(err)) {
+      throw new Error(
+        'ميزة رفع الملفات من الجهاز تتطلب تشغيل الخادم؛ يمكنك اختيار أحد الشعارات الجاهزة أو إكمال التسجيل بدون ملف.'
+      );
     }
-  );
-  return res;
+    throw err;
+  }
 }
 
 export async function submitVerifiedReviewApi(payload: {

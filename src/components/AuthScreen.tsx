@@ -18,11 +18,15 @@ import {
   getGovernorateDistricts,
 } from '../data/catalog';
 import {
-  apiRequest,
   setAuthToken,
   uploadMediaFile,
 } from '../lib/api';
-import { signInWithGoogleRole } from '../lib/cloudSync';
+import {
+  loginWithEmailRole,
+  registerCustomerAccount,
+  registerStoreAccount,
+  signInWithGoogleRole,
+} from '../lib/cloudSync';
 import { AuthUser, StoreProfile } from '../types';
 import { SafeImage } from './SafeImage';
 import { ThemeMode, ThemeToggle } from './ThemeToggle';
@@ -72,13 +76,36 @@ function formatAuthError(err: unknown): string {
     return 'تم إلغاء طلب نافذة تسجيل الدخول. يرجى المحاولة مرة واحدة.';
   }
   if (lower.includes('auth/unauthorized-domain')) {
-    return 'النطاق الحالي غير مضاف في إعدادات النطاقات المصرح بها لتسجيل Google، يرجى استخدام التسجيل بالبريد الإلكتروني وكلمة المرور.';
+    const host =
+      typeof window !== 'undefined' ? window.location.hostname : '';
+    return host
+      ? `النطاق الحالي (${host}) غير مضاف في النطاقات المصرح بها لتسجيل Google (Authentication → Settings → Authorized domains). يمكنك استخدام البريد الإلكتروني وكلمة المرور أدناه مباشرة.`
+      : 'النطاق الحالي غير مضاف في إعدادات النطاقات المصرح بها لتسجيل Google، يرجى استخدام التسجيل بالبريد الإلكتروني وكلمة المرور.';
+  }
+  if (lower.includes('auth/email-already-in-use')) {
+    return 'هذا البريد الإلكتروني مسجل مسبقاً. يمكنك تسجيل الدخول مباشرة أو استخدام بريد آخر.';
+  }
+  if (
+    lower.includes('auth/invalid-credential') ||
+    lower.includes('auth/wrong-password') ||
+    lower.includes('auth/user-not-found')
+  ) {
+    return 'بيانات الدخول غير صحيحة. تأكد من البريد الإلكتروني وكلمة المرور.';
+  }
+  if (lower.includes('auth/weak-password')) {
+    return 'كلمة المرور ضعيفة جداً؛ يرجى إدخال كلمة مرور من 6 أحرف على الأقل.';
+  }
+  if (lower.includes('auth/invalid-email')) {
+    return 'صيغة البريد الإلكتروني غير صالحة.';
+  }
+  if (lower.includes('auth/too-many-requests')) {
+    return 'تم تجاوز عدد المحاولات المسموح بها مؤقتاً، يرجى الانتظار دقيقة ثم المحاولة.';
   }
   if (lower.includes('auth/network-request-failed')) {
     return 'تعذر الاتصال بخدمة المصادقة السحابية. تحقق من اتصال الإنترنت.';
   }
   if (lower.includes('auth/operation-not-allowed')) {
-    return 'تسجيل الدخول عبر Google غير مفعّل حالياً في إعدادات المشروع. يرجى التسجيل عبر البريد الإلكتروني وكلمة المرور.';
+    return 'مزود تسجيل الدخول هذا غير مفعّل في إعدادات Firebase Authentication. افتح لوحة Firebase Console ثم Authentication → Sign-in method وفعّل Email/Password و Google.';
   }
   if (lower.includes('auth/account-exists-with-different-credential')) {
     return 'هذا البريد مسجل مسبقاً بطريقة دخول مختلفة.';
@@ -288,13 +315,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     setError('');
     setLoading(true);
     try {
-      const res = await apiRequest<{
-        token: string;
-        user: AuthUser;
-        store?: StoreProfile | null;
-      }>('/api/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      const expectedRole = roleMode === 'store' ? 'store_owner' : 'customer';
+      const res = await loginWithEmailRole({
+        email: loginEmail,
+        password: loginPassword,
+        expectedRole,
       });
 
       if (roleMode === 'store' && res.user.role !== 'store_owner') {
@@ -336,21 +361,15 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     setLoading(true);
     try {
       const fallbackCoords = getCityCoordinates(custCity);
-      const res = await apiRequest<{ token: string; user: AuthUser }>(
-        '/api/auth/register-customer',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            name: custName.trim(),
-            email: custEmail.trim(),
-            password: custPassword,
-            city: custCity,
-            district: custDistrict,
-            lat: custLat ?? fallbackCoords.lat,
-            lng: custLng ?? fallbackCoords.lng,
-          }),
-        }
-      );
+      const res = await registerCustomerAccount({
+        name: custName.trim(),
+        email: custEmail.trim(),
+        password: custPassword,
+        city: custCity,
+        district: custDistrict,
+        lat: custLat ?? fallbackCoords.lat,
+        lng: custLng ?? fallbackCoords.lng,
+      });
       setAuthToken(res.token);
       onAuthSuccess(res.user, null, true);
     } catch (err) {
@@ -396,29 +415,22 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         .filter(Boolean);
 
       const fallbackCoords = getCityCoordinates(storeCity);
-      const res = await apiRequest<{
-        token: string;
-        user: AuthUser;
-        store: StoreProfile;
-      }>('/api/auth/register-store', {
-        method: 'POST',
-        body: JSON.stringify({
-          ownerName: ownerName.trim(),
-          email: storeEmail.trim(),
-          password: storePassword,
-          storeName: storeName.trim(),
-          logo: storeLogo,
-          city: storeCity,
-          district: storeDistrict,
-          address: storeAddress.trim(),
-          phone: storePhone.trim(),
-          workingHours: storeHours.trim(),
-          description: storeDescription.trim(),
-          specialties,
-          licenseDocUrl: licenseDocUrl || undefined,
-          lat: storeLat ?? fallbackCoords.lat,
-          lng: storeLng ?? fallbackCoords.lng,
-        }),
+      const res = await registerStoreAccount({
+        ownerName: ownerName.trim(),
+        email: storeEmail.trim(),
+        password: storePassword,
+        storeName: storeName.trim(),
+        logo: storeLogo,
+        city: storeCity,
+        district: storeDistrict,
+        address: storeAddress.trim(),
+        phone: storePhone.trim(),
+        workingHours: storeHours.trim(),
+        description: storeDescription.trim(),
+        specialties,
+        licenseDocUrl: licenseDocUrl || undefined,
+        lat: storeLat ?? fallbackCoords.lat,
+        lng: storeLng ?? fallbackCoords.lng,
       });
       setAuthToken(res.token);
       onAuthSuccess(res.user, res.store, true);

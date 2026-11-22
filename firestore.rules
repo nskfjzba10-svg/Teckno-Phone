@@ -17,7 +17,7 @@ service cloud.firestore {
     }
 
     function isSignedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
+      return request.auth != null;
     }
 
     function isValidId(id) {
@@ -319,10 +319,12 @@ service cloud.firestore {
     // Stores Directory
     match /stores/{storeId} {
       allow get: if isValidId(storeId) && isSignedIn() && (
-        existing().verified == true || existing().ownerId == request.auth.uid
+        existing().verificationStatus in ['unverified', 'pending', 'verified'] ||
+        existing().ownerId == request.auth.uid
       );
       allow list: if isSignedIn() && (
-        existing().verified == true || existing().ownerId == request.auth.uid
+        existing().verificationStatus in ['unverified', 'pending', 'verified'] ||
+        existing().ownerId == request.auth.uid
       );
       allow create: if isValidId(storeId) && isSignedIn() &&
         isValidStore(incoming()) &&

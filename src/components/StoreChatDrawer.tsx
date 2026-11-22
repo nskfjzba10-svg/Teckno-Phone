@@ -4,8 +4,14 @@ import {
   apiRequest,
   getCustomerSessionId,
   getSavedCustomerName,
+  isBackendUnavailable,
   saveCustomerName,
 } from '../lib/api';
+import {
+  isDirectFirebaseSession,
+  loadConversationFromFirestore,
+  sendMessageInFirestore,
+} from '../lib/cloudSync';
 import { AuthUser, ChatMessage, StoreProfile } from '../types';
 import { SafeImage } from './SafeImage';
 
@@ -43,11 +49,25 @@ export const StoreChatDrawer: React.FC<StoreChatDrawerProps> = ({
     let active = true;
     const loadMessages = async () => {
       try {
+        if (isDirectFirebaseSession()) {
+          const msgs = await loadConversationFromFirestore(store.id, sessionId);
+          if (active) setMessages(msgs);
+          return;
+        }
         const res = await apiRequest<{ messages: ChatMessage[] }>(
           `/api/conversations/${encodeURIComponent(store.id)}?customerSessionId=${encodeURIComponent(sessionId)}`
         );
         if (active) setMessages(res.messages);
       } catch (err) {
+        if (isBackendUnavailable(err)) {
+          try {
+            const msgs = await loadConversationFromFirestore(store.id, sessionId);
+            if (active) setMessages(msgs);
+            return;
+          } catch {
+            // Ignore transient load error
+          }
+        }
         if (active) {
           setError(
             err instanceof Error ? err.message : 'تعذر تحميل المحادثة'
@@ -84,10 +104,22 @@ export const StoreChatDrawer: React.FC<StoreChatDrawerProps> = ({
     if (!text.trim()) return;
     setError('');
     setSending(true);
+    const displayName = customerName.trim() || 'زبون';
+    if (customerName.trim()) {
+      saveCustomerName(customerName.trim());
+    }
     try {
-      const displayName = customerName.trim() || 'زبون';
-      if (customerName.trim()) {
-        saveCustomerName(customerName.trim());
+      if (isDirectFirebaseSession()) {
+        const msg = await sendMessageInFirestore({
+          store,
+          customerId: sessionId,
+          customerName: displayName,
+          senderRole: 'customer',
+          text: text.trim(),
+        });
+        setMessages((prev) => [...prev, msg]);
+        setText('');
+        return;
       }
       const res = await apiRequest<{ message: ChatMessage }>(
         `/api/conversations/${encodeURIComponent(store.id)}/messages`,
@@ -103,6 +135,23 @@ export const StoreChatDrawer: React.FC<StoreChatDrawerProps> = ({
       setMessages((prev) => [...prev, res.message]);
       setText('');
     } catch (err) {
+      if (isBackendUnavailable(err)) {
+        try {
+          const msg = await sendMessageInFirestore({
+            store,
+            customerId: sessionId,
+            customerName: displayName,
+            senderRole: 'customer',
+            text: text.trim(),
+          });
+          setMessages((prev) => [...prev, msg]);
+          setText('');
+          return;
+        } catch (fsErr) {
+          setError(fsErr instanceof Error ? fsErr.message : 'فشل إرسال الرسالة');
+          return;
+        }
+      }
       setError(err instanceof Error ? err.message : 'فشل إرسال الرسالة');
     } finally {
       setSending(false);

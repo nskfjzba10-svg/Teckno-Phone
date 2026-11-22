@@ -27,7 +27,22 @@ import {
   formatCurrency,
   getGovernorateDistricts,
 } from '../data/catalog';
-import { apiRequest, uploadMediaFile } from '../lib/api';
+import {
+  apiRequest,
+  isBackendUnavailable,
+  uploadMediaFile,
+} from '../lib/api';
+import {
+  createProductInFirestore,
+  deleteProductInFirestore,
+  fetchStoreDashboardFromFirestore,
+  isDirectFirebaseSession,
+  respondTradeInInFirestore,
+  sendMessageInFirestore,
+  updateBookingInFirestore,
+  updateProductPriceInFirestore,
+  updateStoreProfileInFirestore,
+} from '../lib/cloudSync';
 import {
   AuthUser,
   ChatMessage,
@@ -162,16 +177,15 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
   const cityDistricts = useMemo(() => getGovernorateDistricts(city), [city]);
 
   const fetchDashboard = useCallback(async () => {
-    try {
-      const data = await apiRequest<{
-        store: StoreProfile;
-        products: Product[];
-        bookings: TrackingRecord[];
-        threads: ConversationThread[];
-        reviews?: VerifiedReview[];
-        tradeins?: TradeInRequest[];
-        analytics?: StoreAnalytics;
-      }>(`/api/stores/${encodeURIComponent(store.id)}/dashboard`);
+    const applyDashboardData = (data: {
+      store?: StoreProfile;
+      products: Product[];
+      bookings: TrackingRecord[];
+      threads: ConversationThread[];
+      reviews?: VerifiedReview[];
+      tradeins?: TradeInRequest[];
+      analytics?: StoreAnalytics;
+    }) => {
       setProducts(Array.isArray(data.products) ? data.products : []);
       setBookings(Array.isArray(data.bookings) ? data.bookings : []);
       const nextThreads = Array.isArray(data.threads) ? data.threads : [];
@@ -184,14 +198,44 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
       if (nextThreads.length > 0 && !selectedThreadId) {
         setSelectedThreadId(nextThreads[0].customerSessionId);
       }
+    };
+
+    try {
+      if (isDirectFirebaseSession()) {
+        const fsData = await fetchStoreDashboardFromFirestore(store);
+        applyDashboardData(fsData);
+        return;
+      }
+      const data = await apiRequest<{
+        store: StoreProfile;
+        products: Product[];
+        bookings: TrackingRecord[];
+        threads: ConversationThread[];
+        reviews?: VerifiedReview[];
+        tradeins?: TradeInRequest[];
+        analytics?: StoreAnalytics;
+      }>(`/api/stores/${encodeURIComponent(store.id)}/dashboard`);
+      applyDashboardData(data);
     } catch (err) {
+      if (isBackendUnavailable(err)) {
+        try {
+          const fsData = await fetchStoreDashboardFromFirestore(store);
+          applyDashboardData(fsData);
+          return;
+        } catch (fsErr) {
+          setStatusError(
+            fsErr instanceof Error ? fsErr.message : 'تعذر تحميل لوحة التحكم'
+          );
+          return;
+        }
+      }
       setStatusError(
         err instanceof Error ? err.message : 'تعذر تحميل لوحة التحكم'
       );
     } finally {
       setLoading(false);
     }
-  }, [store.id, selectedThreadId]);
+  }, [store, selectedThreadId]);
 
   useEffect(() => {
     fetchDashboard();
@@ -208,36 +252,54 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
     e.preventDefault();
     setStatusError('');
     setProfileSaved(false);
+    const specialties = specialtiesText
+      .split(/[،,]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const payload = {
+      name,
+      logo,
+      city,
+      district,
+      address,
+      phone,
+      workingHours,
+      description,
+      specialties,
+      licenseDocUrl: licenseDocUrl || undefined,
+      lat,
+      lng,
+    };
     try {
-      const specialties = specialtiesText
-        .split(/[،,]/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-      const res = await apiRequest<{ store: StoreProfile }>(
-        `/api/stores/${encodeURIComponent(store.id)}`,
-        {
-          method: 'PUT',
-          body: JSON.stringify({
-            name,
-            logo,
-            city,
-            district,
-            address,
-            phone,
-            workingHours,
-            description,
-            specialties,
-            licenseDocUrl: licenseDocUrl || undefined,
-            lat,
-            lng,
-          }),
-        }
-      );
-      onStoreUpdated(res.store);
+      const updated = isDirectFirebaseSession()
+        ? await updateStoreProfileInFirestore(store, payload)
+        : (
+            await apiRequest<{ store: StoreProfile }>(
+              `/api/stores/${encodeURIComponent(store.id)}`,
+              {
+                method: 'PUT',
+                body: JSON.stringify(payload),
+              }
+            )
+          ).store;
+      onStoreUpdated(updated);
       setProfileSaved(true);
       window.setTimeout(() => setProfileSaved(false), 3000);
     } catch (err) {
+      if (isBackendUnavailable(err)) {
+        try {
+          const updated = await updateStoreProfileInFirestore(store, payload);
+          onStoreUpdated(updated);
+          setProfileSaved(true);
+          window.setTimeout(() => setProfileSaved(false), 3000);
+          return;
+        } catch (fsErr) {
+          setStatusError(
+            fsErr instanceof Error ? fsErr.message : 'فشل تحديث بيانات المتجر'
+          );
+          return;
+        }
+      }
       setStatusError(
         err instanceof Error ? err.message : 'فشل تحديث بيانات المتجر'
       );
@@ -285,38 +347,30 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
   const handleAddProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     setStatusError('');
-    try {
-      const isUsedOrRefurb = prodCondition !== 'جديد';
-      const res = await apiRequest<{ product: Product }>(
-        `/api/stores/${encodeURIComponent(store.id)}/products`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            name: prodName,
-            brand: prodBrand,
-            category: prodCategory,
-            price: Number(prodPrice),
-            oldPrice: prodOldPrice ? Number(prodOldPrice) : undefined,
-            condition: prodCondition,
-            warrantyMonths: Number(prodWarranty) || 12,
-            image: prodImage,
-            extraImages:
-              prodExtraImages.length > 0 ? prodExtraImages : undefined,
-            imei: prodImei.trim() || undefined,
-            batteryHealth: isUsedOrRefurb
-              ? Number(prodBatteryHealth) || 90
-              : 100,
-            previouslyOpened: isUsedOrRefurb ? prodPreviouslyOpened : false,
-            summary: prodSummary,
-            screenSpec: prodScreen,
-            processorSpec: prodProcessor,
-            batterySpec: prodBattery,
-            storageLabel: prodStorage,
-            colorName: prodColor,
-          }),
-        }
-      );
-      setProducts((prev) => [res.product, ...prev]);
+    const isUsedOrRefurb = prodCondition !== 'جديد';
+    const bodyPayload = {
+      name: prodName,
+      brand: prodBrand,
+      category: prodCategory,
+      price: Number(prodPrice),
+      oldPrice: prodOldPrice ? Number(prodOldPrice) : undefined,
+      condition: prodCondition,
+      warrantyMonths: Number(prodWarranty) || 12,
+      image: prodImage,
+      extraImages: prodExtraImages.length > 0 ? prodExtraImages : undefined,
+      imei: prodImei.trim() || undefined,
+      batteryHealth: isUsedOrRefurb ? Number(prodBatteryHealth) || 90 : 100,
+      previouslyOpened: isUsedOrRefurb ? prodPreviouslyOpened : false,
+      summary: prodSummary,
+      screenSpec: prodScreen,
+      processorSpec: prodProcessor,
+      batterySpec: prodBattery,
+      storageLabel: prodStorage,
+      colorName: prodColor,
+    };
+
+    const finishSuccess = (product: Product) => {
+      setProducts((prev) => [product, ...prev]);
       onProductsChanged();
       setProdName('');
       setProdBrand('');
@@ -329,7 +383,35 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
       setProdProcessor('');
       setProdBattery('');
       showTempSuccess('تم نشر المنتج في متجرك بنجاح.');
+    };
+
+    try {
+      if (isDirectFirebaseSession()) {
+        const created = await createProductInFirestore(store, bodyPayload);
+        finishSuccess(created);
+        return;
+      }
+      const res = await apiRequest<{ product: Product }>(
+        `/api/stores/${encodeURIComponent(store.id)}/products`,
+        {
+          method: 'POST',
+          body: JSON.stringify(bodyPayload),
+        }
+      );
+      finishSuccess(res.product);
     } catch (err) {
+      if (isBackendUnavailable(err)) {
+        try {
+          const created = await createProductInFirestore(store, bodyPayload);
+          finishSuccess(created);
+          return;
+        } catch (fsErr) {
+          setStatusError(
+            fsErr instanceof Error ? fsErr.message : 'تعذر إضافة المنتج'
+          );
+          return;
+        }
+      }
       setStatusError(
         err instanceof Error ? err.message : 'تعذر إضافة المنتج'
       );
@@ -343,7 +425,26 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
       return;
     }
     setStatusError('');
+    const finishPrice = (updated: Product) => {
+      setProducts((prev) =>
+        prev.map((p) => (p.id === prod.id ? updated : p))
+      );
+      setEditingPriceId(null);
+      setPriceDraft('');
+      onProductsChanged();
+      showTempSuccess(
+        nextPrice < prod.price
+          ? 'تم تحديث السعر وإرسال تنبيه انخفاض السعر للزبائن المهتمين.'
+          : 'تم تحديث سعر المنتج.'
+      );
+    };
+
     try {
+      if (isDirectFirebaseSession()) {
+        const updated = await updateProductPriceInFirestore(prod, nextPrice);
+        finishPrice(updated);
+        return;
+      }
       const res = await apiRequest<{ product: Product }>(
         `/api/stores/${encodeURIComponent(store.id)}/products/${encodeURIComponent(prod.id)}`,
         {
@@ -359,18 +460,20 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
           }),
         }
       );
-      setProducts((prev) =>
-        prev.map((p) => (p.id === prod.id ? res.product : p))
-      );
-      setEditingPriceId(null);
-      setPriceDraft('');
-      onProductsChanged();
-      showTempSuccess(
-        nextPrice < prod.price
-          ? 'تم تحديث السعر وإرسال تنبيه انخفاض السعر للزبائن المهتمين.'
-          : 'تم تحديث سعر المنتج.'
-      );
+      finishPrice(res.product);
     } catch (err) {
+      if (isBackendUnavailable(err)) {
+        try {
+          const updated = await updateProductPriceInFirestore(prod, nextPrice);
+          finishPrice(updated);
+          return;
+        } catch (fsErr) {
+          setStatusError(
+            fsErr instanceof Error ? fsErr.message : 'تعذر تعديل السعر'
+          );
+          return;
+        }
+      }
       setStatusError(
         err instanceof Error ? err.message : 'تعذر تعديل السعر'
       );
@@ -379,6 +482,12 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
 
   const handleDeleteProduct = async (productId: string) => {
     try {
+      if (isDirectFirebaseSession()) {
+        await deleteProductInFirestore(productId);
+        setProducts((prev) => prev.filter((p) => p.id !== productId));
+        onProductsChanged();
+        return;
+      }
       await apiRequest(
         `/api/stores/${encodeURIComponent(store.id)}/products/${encodeURIComponent(productId)}`,
         { method: 'DELETE' }
@@ -386,6 +495,19 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
       setProducts((prev) => prev.filter((p) => p.id !== productId));
       onProductsChanged();
     } catch (err) {
+      if (isBackendUnavailable(err)) {
+        try {
+          await deleteProductInFirestore(productId);
+          setProducts((prev) => prev.filter((p) => p.id !== productId));
+          onProductsChanged();
+          return;
+        } catch (fsErr) {
+          setStatusError(
+            fsErr instanceof Error ? fsErr.message : 'تعذر حذف المنتج'
+          );
+          return;
+        }
+      }
       setStatusError(
         err instanceof Error ? err.message : 'تعذر حذف المنتج'
       );
@@ -396,7 +518,18 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
     technicians?: StoreTechnician[];
     promoCodes?: PromoCode[];
   }) => {
+    const finishTeam = (updated: StoreProfile) => {
+      onStoreUpdated(updated);
+      if (updated.technicians) setTechnicians(updated.technicians);
+      if (updated.promoCodes) setPromoCodes(updated.promoCodes);
+      showTempSuccess('تم تحديث الإعدادات وحفظها.');
+    };
     try {
+      if (isDirectFirebaseSession()) {
+        const updated = await updateStoreProfileInFirestore(store, payload);
+        finishTeam(updated);
+        return;
+      }
       const res = await apiRequest<{ store: StoreProfile }>(
         `/api/stores/${encodeURIComponent(store.id)}`,
         {
@@ -404,11 +537,20 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
           body: JSON.stringify(payload),
         }
       );
-      onStoreUpdated(res.store);
-      if (res.store.technicians) setTechnicians(res.store.technicians);
-      if (res.store.promoCodes) setPromoCodes(res.store.promoCodes);
-      showTempSuccess('تم تحديث الإعدادات وحفظها.');
+      finishTeam(res.store);
     } catch (err) {
+      if (isBackendUnavailable(err)) {
+        try {
+          const updated = await updateStoreProfileInFirestore(store, payload);
+          finishTeam(updated);
+          return;
+        } catch (fsErr) {
+          setStatusError(
+            fsErr instanceof Error ? fsErr.message : 'تعذر حفظ التعديلات'
+          );
+          return;
+        }
+      }
       setStatusError(
         err instanceof Error ? err.message : 'تعذر حفظ التعديلات'
       );
@@ -475,6 +617,16 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
     setSavingBookingId(bookingId);
     setStatusError('');
     try {
+      if (isDirectFirebaseSession()) {
+        const target = bookings.find((b) => b.id === bookingId);
+        if (!target) throw new Error('الحجز غير موجود.');
+        const updated = await updateBookingInFirestore(target, store.name, payload);
+        setBookings((prev) =>
+          prev.map((b) => (b.id === bookingId ? updated : b))
+        );
+        showTempSuccess('تم تحديث التذكرة بنجاح.');
+        return;
+      }
       const res = await apiRequest<{ booking: TrackingRecord }>(
         `/api/stores/${encodeURIComponent(store.id)}/bookings/${encodeURIComponent(bookingId)}`,
         {
@@ -487,6 +639,28 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
       );
       showTempSuccess('تم تحديث التذكرة وإشعار الزبون تلقائياً.');
     } catch (err) {
+      if (isBackendUnavailable(err)) {
+        try {
+          const target = bookings.find((b) => b.id === bookingId);
+          if (target) {
+            const updated = await updateBookingInFirestore(
+              target,
+              store.name,
+              payload
+            );
+            setBookings((prev) =>
+              prev.map((b) => (b.id === bookingId ? updated : b))
+            );
+            showTempSuccess('تم تحديث التذكرة بنجاح.');
+            return;
+          }
+        } catch (fsErr) {
+          setStatusError(
+            fsErr instanceof Error ? fsErr.message : 'تعذر تحديث حالة الحجز'
+          );
+          return;
+        }
+      }
       setStatusError(
         err instanceof Error ? err.message : 'تعذر تحديث حالة الحجز'
       );
@@ -505,7 +679,38 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
       offeredRaw !== undefined && offeredRaw !== ''
         ? Number(offeredRaw)
         : item.estimatedValue;
+    const notesText =
+      tradeNotesDrafts[item.id] ??
+      (decision === 'quoted'
+        ? 'السعر مبدئي ويثبّت بعد الفحص السريع بالمتجر.'
+        : 'نعتذر، هذا الموديل غير مطلوب حالياً.');
+
+    const finishTrade = (updated: TradeInRequest) => {
+      setTradeins((prev) =>
+        prev.map((t) => (t.id === item.id ? updated : t))
+      );
+      showTempSuccess(
+        decision === 'quoted'
+          ? 'تم إرسال عرض الاستبدال للزبون وإشعاره.'
+          : 'تم تحديث حالة طلب الاستبدال.'
+      );
+    };
+
     try {
+      if (isDirectFirebaseSession()) {
+        await respondTradeInInFirestore(item.id, {
+          status: decision,
+          offeredValue: offeredNum,
+          storeNotes: notesText,
+        });
+        finishTrade({
+          ...item,
+          status: decision,
+          offeredValue: offeredNum,
+          storeNotes: notesText,
+        });
+        return;
+      }
       const res = await apiRequest<{ tradein: TradeInRequest }>(
         `/api/tradeins/${encodeURIComponent(item.id)}`,
         {
@@ -513,23 +718,33 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
           body: JSON.stringify({
             status: decision,
             offeredValue: offeredNum,
-            storeNotes:
-              tradeNotesDrafts[item.id] ??
-              (decision === 'quoted'
-                ? 'السعر مبدئي ويثبّت بعد الفحص السريع بالمتجر.'
-                : 'نعتذر، هذا الموديل غير مطلوب حالياً.'),
+            storeNotes: notesText,
           }),
         }
       );
-      setTradeins((prev) =>
-        prev.map((t) => (t.id === item.id ? res.tradein : t))
-      );
-      showTempSuccess(
-        decision === 'quoted'
-          ? 'تم إرسال عرض الاستبدال للزبون وإشعاره.'
-          : 'تم تحديث حالة طلب الاستبدال.'
-      );
+      finishTrade(res.tradein);
     } catch (err) {
+      if (isBackendUnavailable(err)) {
+        try {
+          await respondTradeInInFirestore(item.id, {
+            status: decision,
+            offeredValue: offeredNum,
+            storeNotes: notesText,
+          });
+          finishTrade({
+            ...item,
+            status: decision,
+            offeredValue: offeredNum,
+            storeNotes: notesText,
+          });
+          return;
+        } catch (fsErr) {
+          setStatusError(
+            fsErr instanceof Error ? fsErr.message : 'تعذر تحديث طلب الاستبدال'
+          );
+          return;
+        }
+      }
       setStatusError(
         err instanceof Error ? err.message : 'تعذر تحديث طلب الاستبدال'
       );
@@ -543,7 +758,33 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
   const handleSendReply = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeThread || !replyText.trim()) return;
+    const appendMsg = (msg: ChatMessage) => {
+      setThreads((prev) =>
+        prev.map((t) =>
+          t.customerSessionId === activeThread.customerSessionId
+            ? {
+                ...t,
+                messages: [...t.messages, msg],
+                lastMessageAt: msg.createdAt,
+              }
+            : t
+        )
+      );
+      setReplyText('');
+    };
+
     try {
+      if (isDirectFirebaseSession()) {
+        const msg = await sendMessageInFirestore({
+          store,
+          customerId: activeThread.customerSessionId,
+          customerName: activeThread.customerName,
+          senderRole: 'store_owner',
+          text: replyText.trim(),
+        });
+        appendMsg(msg);
+        return;
+      }
       const res = await apiRequest<{ message: ChatMessage }>(
         `/api/conversations/${encodeURIComponent(store.id)}/messages`,
         {
@@ -555,19 +796,26 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
           }),
         }
       );
-      setThreads((prev) =>
-        prev.map((t) =>
-          t.customerSessionId === activeThread.customerSessionId
-            ? {
-                ...t,
-                messages: [...t.messages, res.message],
-                lastMessageAt: res.message.createdAt,
-              }
-            : t
-        )
-      );
-      setReplyText('');
+      appendMsg(res.message);
     } catch (err) {
+      if (isBackendUnavailable(err)) {
+        try {
+          const msg = await sendMessageInFirestore({
+            store,
+            customerId: activeThread.customerSessionId,
+            customerName: activeThread.customerName,
+            senderRole: 'store_owner',
+            text: replyText.trim(),
+          });
+          appendMsg(msg);
+          return;
+        } catch (fsErr) {
+          setStatusError(
+            fsErr instanceof Error ? fsErr.message : 'فشل إرسال الرد'
+          );
+          return;
+        }
+      }
       setStatusError(
         err instanceof Error ? err.message : 'فشل إرسال الرد'
       );
