@@ -19,6 +19,7 @@ import {
   UserRole,
   VerifiedReview,
 } from '../types';
+import { apiRequest } from './api';
 import {
   OperationType,
   auth,
@@ -27,8 +28,22 @@ import {
   handleFirestoreError,
 } from './firebase';
 
+const DEFAULT_STORE_LOGO =
+  '/src/assets/images/product_titanium_phone_1794983260872.jpg';
+
 function sanitizeId(raw: string): string {
   return raw.replace(/[^a-zA-Z0-9_-]/g, '-');
+}
+
+function clampString(
+  raw: string | undefined | null,
+  fallback: string,
+  minLen: number,
+  maxLen: number
+): string {
+  const cleaned = (raw || '').trim();
+  const base = cleaned.length >= minLen ? cleaned : fallback;
+  return base.slice(0, maxLen);
 }
 
 export async function signInWithGoogleRole(opts: {
@@ -49,10 +64,64 @@ export async function signInWithGoogleRole(opts: {
     lat: number;
     lng: number;
   };
-}): Promise<{ user: AuthUser; store: StoreProfile | null; isNew: boolean }> {
+}): Promise<{
+  token: string;
+  user: AuthUser;
+  store: StoreProfile | null;
+  isNew: boolean;
+}> {
   const cred = await signInWithPopup(auth, googleProvider);
   const fbUser = cred.user;
-  return ensureFirebaseProfile(fbUser, opts);
+
+  let cloudProfile: {
+    user: AuthUser;
+    store: StoreProfile | null;
+    isNew: boolean;
+  } | null = null;
+  try {
+    cloudProfile = await ensureFirebaseProfile(fbUser, opts);
+  } catch (err) {
+    // If role already registered differently in Firestore, surface immediately
+    if (err instanceof Error && err.message.startsWith('ROLE_MISMATCH:')) {
+      await signOutFirebase();
+      throw new Error(err.message.replace('ROLE_MISMATCH:', ''));
+    }
+    // Otherwise let Firestore error throw so rules issues aren't silently swallowed,
+    // UNLESS it's a transient offline error where backend session can still proceed.
+    const msg = err instanceof Error ? err.message : '';
+    if (!msg.includes('client is offline')) {
+      throw err;
+    }
+  }
+
+  const idToken = await fbUser.getIdToken();
+  try {
+    const serverSession = await apiRequest<{
+      token: string;
+      user: AuthUser;
+      store?: StoreProfile | null;
+      isNew?: boolean;
+    }>('/api/auth/firebase-session', {
+      method: 'POST',
+      body: JSON.stringify({
+        idToken,
+        role: opts.role,
+        governorate: opts.governorate,
+        district: opts.district,
+        storeDraft: opts.storeDraft,
+      }),
+    });
+
+    return {
+      token: serverSession.token,
+      user: serverSession.user,
+      store: serverSession.store ?? cloudProfile?.store ?? null,
+      isNew: serverSession.isNew ?? cloudProfile?.isNew ?? false,
+    };
+  } catch (err) {
+    await signOutFirebase();
+    throw err;
+  }
 }
 
 export async function signOutFirebase(): Promise<void> {
@@ -105,6 +174,13 @@ export async function ensureFirebaseProfile(
       governorate?: string;
       district?: string;
     };
+    if (data.role !== opts.role) {
+      throw new Error(
+        data.role === 'store_owner'
+          ? 'ROLE_MISMATCH:حساب Google هذا مسجل كمتجر مسبقاً. يرجى الدخول من تبويب متجر.'
+          : 'ROLE_MISMATCH:حساب Google هذا مسجل كزبون مسبقاً. يرجى التحويل إلى تبويب زبون.'
+      );
+    }
     const city = data.governorate || opts.governorate || 'بغداد';
     const coords = getCityCoordinates(city);
     let storeProfile: StoreProfile | null = null;
@@ -136,11 +212,25 @@ export async function ensureFirebaseProfile(
     };
   }
 
-  const gov = opts.governorate || opts.storeDraft?.city || 'بغداد';
-  const dist = opts.district || opts.storeDraft?.district || '';
+  const gov = clampString(
+    opts.governorate || opts.storeDraft?.city,
+    'بغداد',
+    2,
+    64
+  );
+  const dist = clampString(
+    opts.district || opts.storeDraft?.district,
+    '',
+    0,
+    64
+  );
   const coords = getCityCoordinates(gov);
-  const displayName =
-    fbUser.displayName || opts.storeDraft?.storeName || 'مستخدم تكنو فون';
+  const displayName = clampString(
+    fbUser.displayName || opts.storeDraft?.storeName,
+    'مستخدم تكنو فون',
+    2,
+    120
+  );
 
   let storeId: string | undefined;
   let createdStore: StoreProfile | null = null;
@@ -148,34 +238,61 @@ export async function ensureFirebaseProfile(
   if (opts.role === 'store_owner') {
     storeId = sanitizeId(`store-${uid.slice(0, 10)}`);
     const draft = opts.storeDraft;
-    const storeName = draft?.storeName?.trim() || `متجر ${displayName}`;
-    const hasDoc = Boolean(draft?.licenseDocUrl?.trim());
+    const storeName = clampString(
+      draft?.storeName || `متجر ${displayName}`,
+      `متجر ${displayName}`,
+      2,
+      160
+    );
+    const safeLogo =
+      draft?.logo && draft.logo.trim().length <= 950
+        ? draft.logo.trim()
+        : DEFAULT_STORE_LOGO;
+    const safeLicense =
+      draft?.licenseDocUrl && draft.licenseDocUrl.trim().length <= 950
+        ? draft.licenseDocUrl.trim()
+        : undefined;
+    const hasDoc = Boolean(safeLicense);
+    const safeLat =
+      typeof draft?.lat === 'number' && Number.isFinite(draft.lat)
+        ? draft.lat
+        : coords.lat;
+    const safeLng =
+      typeof draft?.lng === 'number' && Number.isFinite(draft.lng)
+        ? draft.lng
+        : coords.lng;
+    const safeSpecialties =
+      draft?.specialties && draft.specialties.length > 0
+        ? draft.specialties.slice(0, 15).map((s) => s.slice(0, 80))
+        : ['هواتف ذكية', 'صيانة معتمدة'];
+
     const storeDocData = {
       id: storeId,
       ownerId: uid,
       name: storeName,
-      logo:
-        draft?.logo ||
-        '/src/assets/images/product_titanium_phone_1794983260872.jpg',
-      city: draft?.city || gov,
-      district: draft?.district || dist || 'المركز',
-      address: draft?.address?.trim() || `${gov} — المركز التجاري`,
-      phone: draft?.phone?.trim() || '07700000000',
-      workingHours: draft?.workingHours || '10:00 صباحاً – 10:30 مساءً',
-      description:
-        draft?.description?.trim() ||
+      logo: safeLogo,
+      city: clampString(draft?.city, gov, 2, 64),
+      district: clampString(draft?.district || dist, 'المركز', 0, 64),
+      address: clampString(draft?.address, `${gov} — المركز التجاري`, 2, 300),
+      phone: clampString(draft?.phone, '07700000000', 6, 32),
+      workingHours: clampString(
+        draft?.workingHours,
+        '10:00 صباحاً – 10:30 مساءً',
+        2,
+        120
+      ),
+      description: clampString(
+        draft?.description,
         'متجر متخصص في بيع وصيانة الأجهزة الذكية في العراق.',
-      specialties:
-        draft?.specialties && draft.specialties.length > 0
-          ? draft.specialties
-          : ['هواتف ذكية', 'صيانة معتمدة'],
-      lat: draft?.lat ?? coords.lat,
-      lng: draft?.lng ?? coords.lng,
+        2,
+        1000
+      ),
+      specialties: safeSpecialties,
+      lat: safeLat,
+      lng: safeLng,
       verified: false,
       verificationStatus: hasDoc ? 'pending' : 'unverified',
-      ...(hasDoc && draft?.licenseDocUrl
-        ? { licenseDocUrl: draft.licenseDocUrl }
-        : {}),
+      ...(safeLicense ? { licenseDocUrl: safeLicense } : {}),
       avgRating: 5,
       reviewCount: 0,
       technicians: [],
@@ -212,7 +329,7 @@ export async function ensureFirebaseProfile(
 
   try {
     await setDoc(privateRef, {
-      email: fbUser.email || `${uid}@technophone.iq`,
+      email: clampString(fbUser.email, `${uid}@example.com`, 3, 160),
       lat: coords.lat,
       lng: coords.lng,
       updatedAt: serverTimestamp(),

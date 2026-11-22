@@ -86,14 +86,19 @@ export const RepairSection: React.FC<RepairSectionProps> = ({
 }) => {
   const [step, setStep] = useState<WizardStep>(1);
   const [targetStoreId, setTargetStoreId] = useState<string>(
-    preferredStoreId || stores[0]?.id || 'store-techno-baghdad'
+    preferredStoreId || stores[0]?.id || ''
   );
 
   useEffect(() => {
     if (preferredStoreId) {
       setTargetStoreId(preferredStoreId);
+    } else if (
+      stores.length > 0 &&
+      (!targetStoreId || !stores.some((s) => s.id === targetStoreId))
+    ) {
+      setTargetStoreId(stores[0].id);
     }
-  }, [preferredStoreId]);
+  }, [preferredStoreId, stores, targetStoreId]);
 
   // Step 1: Device specification
   const [deviceType, setDeviceType] = useState<RepairDeviceType | null>(null);
@@ -342,9 +347,14 @@ export const RepairSection: React.FC<RepairSectionProps> = ({
 
     const chosenStore =
       stores.find((s) => s.id === targetStoreId) || stores[0];
-    const resolvedStoreId = chosenStore?.id || 'store-techno-baghdad';
-    const resolvedStoreName =
-      chosenStore?.name || 'تكنو فون — فرع المنصور الرئيسي';
+    if (!chosenStore) {
+      setStepError(
+        'لا توجد متاجر صيانة مسجلة حالياً لاستلام الطلب. يرجى المحاولة لاحقاً بعد انضمام المتاجر.'
+      );
+      return;
+    }
+    const resolvedStoreId = chosenStore.id;
+    const resolvedStoreName = chosenStore.name;
 
     const handoverSummary =
       deliveryMethod === 'branch'
@@ -1027,19 +1037,25 @@ export const RepairSection: React.FC<RepairSectionProps> = ({
                       >
                         المتجر / مركز الصيانة المستلم للطلب *
                       </label>
-                      <select
-                        id="repair-target-store"
-                        value={targetStoreId}
-                        onChange={(e) => setTargetStoreId(e.target.value)}
-                        className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-700 dark:focus:border-blue-500 cursor-pointer min-h-[44px]"
-                      >
-                        {stores.map((st) => (
-                          <option key={st.id} value={st.id}>
-                            {st.name} — {st.city}
-                            {st.district ? ` (${st.district})` : ''}
-                          </option>
-                        ))}
-                      </select>
+                      {stores.length === 0 ? (
+                        <div className="p-3.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300">
+                          لا توجد متاجر صيانة مسجلة في المنصة حتى الآن. بمجرد تسجيل أول متجر ستتمكن من إرسال طلب الصيانة مباشرة.
+                        </div>
+                      ) : (
+                        <select
+                          id="repair-target-store"
+                          value={targetStoreId}
+                          onChange={(e) => setTargetStoreId(e.target.value)}
+                          className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-700 dark:focus:border-blue-500 cursor-pointer min-h-[44px]"
+                        >
+                          {stores.map((st) => (
+                            <option key={st.id} value={st.id}>
+                              {st.name} — {st.city}
+                              {st.district ? ` (${st.district})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1246,7 +1262,8 @@ export const RepairSection: React.FC<RepairSectionProps> = ({
 
                       <button
                         type="submit"
-                        className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 dark:bg-blue-600 dark:hover:bg-blue-500 rounded-lg transition-colors cursor-pointer min-h-[46px]"
+                        disabled={stores.length === 0}
+                        className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 disabled:opacity-50 dark:bg-blue-600 dark:hover:bg-blue-500 rounded-lg transition-colors cursor-pointer min-h-[46px]"
                       >
                         <Wrench className="w-4 h-4" />
                         <span>إرسال طلب الصيانة</span>
@@ -1377,7 +1394,7 @@ export const RepairSection: React.FC<RepairSectionProps> = ({
                     dir="ltr"
                     value={searchInput}
                     onChange={(e) => setSearchInput(e.target.value)}
-                    placeholder="TP-1042"
+                    placeholder="أدخل رقم التذكرة أو الطلب"
                     aria-label="رقم التذكرة أو الطلب"
                     className="w-full pr-10 pl-3 py-2.5 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 text-right font-mono tabular-nums focus:outline-none focus:border-blue-700 dark:focus:border-blue-500"
                   />
@@ -1390,26 +1407,28 @@ export const RepairSection: React.FC<RepairSectionProps> = ({
                 </button>
               </form>
 
-              <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-x-3 gap-y-2">
-                <span>نماذج نشطة للتجربة:</span>
-                {trackingRecords.slice(0, 4).map((rec) => (
-                  <button
-                    key={rec.id}
-                    type="button"
-                    onClick={() => {
-                      setSearchInput(rec.id);
-                      onSelectTicketId(rec.id);
-                    }}
-                    className={`font-mono tabular-nums underline underline-offset-4 cursor-pointer transition-colors ${
-                      activeTicketId.toUpperCase() === rec.id.toUpperCase()
-                        ? 'text-blue-700 dark:text-blue-400 font-semibold'
-                        : 'text-slate-700 dark:text-slate-300 hover:text-blue-700 dark:hover:text-blue-400'
-                    }`}
-                  >
-                    {rec.id}
-                  </button>
-                ))}
-              </div>
+              {trackingRecords.length > 0 && (
+                <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <span>آخر الطلبات والتذاكر المسجلة:</span>
+                  {trackingRecords.slice(0, 4).map((rec) => (
+                    <button
+                      key={rec.id}
+                      type="button"
+                      onClick={() => {
+                        setSearchInput(rec.id);
+                        onSelectTicketId(rec.id);
+                      }}
+                      className={`font-mono tabular-nums underline underline-offset-4 cursor-pointer transition-colors ${
+                        activeTicketId.toUpperCase() === rec.id.toUpperCase()
+                          ? 'text-blue-700 dark:text-blue-400 font-semibold'
+                          : 'text-slate-700 dark:text-slate-300 hover:text-blue-700 dark:hover:text-blue-400'
+                      }`}
+                    >
+                      {rec.id}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="lg:col-span-7">
@@ -1577,13 +1596,22 @@ export const RepairSection: React.FC<RepairSectionProps> = ({
                     </div>
                   </div>
                 </div>
+              ) : !activeTicketId.trim() ? (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center">
+                  <p className="text-base font-semibold text-slate-900 dark:text-slate-100 mb-1.5">
+                    أدخل رقم التذكرة أو الطلب للاستعلام الفوري
+                  </p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    ستظهر هنا مراحل التنفيذ وتقرير الفني المختص وبطاقة الضمان الإلكترونية QR.
+                  </p>
+                </div>
               ) : (
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center">
                   <p className="text-base font-semibold text-slate-900 dark:text-slate-100 mb-1.5">
                     لم يتم العثور على سجل مطابق للرقم المدخل
                   </p>
                   <p className="text-sm text-slate-500 dark:text-slate-400">
-                    تأكد من صحة رقم التذكرة (مثل TP-1042) أو رقم الطلب (مثل ORD-2026-4120).
+                    يرجى التحقق من رقم تذكرة الصيانة أو رقم الطلب والمحاولة مرة أخرى.
                   </p>
                 </div>
               )}

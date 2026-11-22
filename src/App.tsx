@@ -117,7 +117,7 @@ export default function App() {
 
   const [cart, setCart] = useState<CartItem[]>(loadInitialCart);
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [activeTicketId, setActiveTicketId] = useState<string>('TP-1042');
+  const [activeTicketId, setActiveTicketId] = useState<string>('');
   const [preferredRepairStoreId, setPreferredRepairStoreId] = useState<
     string | undefined
   >(undefined);

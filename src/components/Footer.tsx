@@ -10,8 +10,13 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 pb-10 border-b border-slate-800">
           <div className="space-y-3">
-            <div className="font-display text-xl font-extrabold text-white">
-              تكنو فون
+            <div className="flex items-center gap-2.5 font-display text-xl font-extrabold text-white">
+              <img
+                src="/logo.png"
+                alt="شعار تكنو فون"
+                className="w-8 h-8 rounded-lg object-cover border border-slate-700 shrink-0"
+              />
+              <span>تكنو فون</span>
             </div>
             <p className="text-sm text-slate-400 leading-relaxed">
               وجهتك الموثوقة لشراء أحدث الأجهزة الذكية وخدمات الصيانة المعتمدة بقطع غيار أصلية وضمان موثق.

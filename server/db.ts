@@ -1,13 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import {
-  INITIAL_PRODUCTS,
-  INITIAL_REVIEWS,
-  INITIAL_STORES,
-  INITIAL_TRACKING_RECORDS,
-  getCityCoordinates,
-} from '../src/data/catalog.ts';
+import { getCityCoordinates } from '../src/data/catalog.ts';
 import type {
   AuthUser,
   ChatMessage,
@@ -31,6 +25,7 @@ export interface StoredUserRecord {
   district?: string;
   lat?: number;
   lng?: number;
+  authProvider?: 'local' | 'firebase';
 }
 
 export interface DatabaseState {
@@ -79,6 +74,7 @@ export function createSessionToken(user: AuthUser): string {
       district: user.district,
       lat: user.lat,
       lng: user.lng,
+      authProvider: user.authProvider || 'local',
       exp: Date.now() + 1000 * 60 * 60 * 24 * 7,
     }),
     'utf-8'
@@ -114,137 +110,24 @@ export function verifySessionToken(token: string): AuthUser | null {
       district: decoded.district,
       lat: decoded.lat,
       lng: decoded.lng,
-      authProvider: 'local',
+      authProvider: decoded.authProvider || 'local',
     };
   } catch {
     return null;
   }
 }
 
-function buildSeedState(): DatabaseState {
-  const demoUsers: StoredUserRecord[] = [
-    {
-      id: 'owner-techno-baghdad',
-      name: 'م. حيدر الكاظمي (مدير فرع المنصور)',
-      email: 'baghdad@technophone.iq',
-      passwordHash: hashPassword('123456'),
-      role: 'store_owner',
-      storeId: 'store-techno-baghdad',
-    },
-    {
-      id: 'owner-spectrum-basra',
-      name: 'أ. مهند التميمي (متجر سبيكتروم)',
-      email: 'basra@spectrum.iq',
-      passwordHash: hashPassword('123456'),
-      role: 'store_owner',
-      storeId: 'store-spectrum-basra',
-    },
-    {
-      id: 'customer-demo',
-      name: 'كرار الربيعي',
-      email: 'customer@technophone.iq',
-      passwordHash: hashPassword('123456'),
-      role: 'customer',
-      city: 'بغداد',
-      district: 'المنصور',
-      lat: 33.3152,
-      lng: 44.3661,
-    },
-  ];
-
-  const seedMessages: ChatMessage[] = [
-    {
-      id: 'msg-seed-1',
-      storeId: 'store-techno-baghdad',
-      customerSessionId: 'demo-thread-1',
-      customerName: 'علي الدليمي',
-      senderRole: 'customer',
-      text: 'السلام عليكم، هل يتوفر آيفون 16 برو تيتانيوم سعة 512 جيجابايت للاستلام اليوم من فرع المنصور؟',
-      createdAt: '10:20 ص',
-    },
-    {
-      id: 'msg-seed-2',
-      storeId: 'store-techno-baghdad',
-      customerSessionId: 'demo-thread-1',
-      customerName: 'علي الدليمي',
-      senderRole: 'store_owner',
-      text: 'وعليكم السلام أهلاً بك، نعم متوفر وجاهز للاستلام الفوري من فرع المنصور أو الحجز عبر صفحة المنتج.',
-      createdAt: '10:24 ص',
-    },
-  ];
-
-  const seedWishlists: WishlistItem[] = [
-    {
-      id: 'wish-seed-1',
-      customerId: 'customer-demo',
-      productId: 'tp-iphone-16-pro',
-      storeId: 'store-techno-baghdad',
-      savedPrice: 1790000,
-      notifyPriceDrop: true,
-      createdAt: '2026-11-15',
-    },
-  ];
-
-  const seedNotifications: NotificationItem[] = [
-    {
-      id: 'notif-seed-1',
-      userId: 'customer-demo',
-      senderId: 'owner-techno-baghdad',
-      title: 'تم إصدار بطاقة الضمان الإلكترونية لطلبك ORD-2026-4120',
-      body: 'اكتمل تسليم آيفون 16 برو تيتانيوم بنجاح. يمكنك الآن عرض بطاقة الضمان بـ QR وتقييم المتجر.',
-      type: 'stage_update',
-      relatedId: 'ORD-2026-4120',
-      read: false,
-      createdAt: 'اليوم 09:10 ص',
-    },
-    {
-      id: 'notif-seed-2',
-      userId: 'customer-demo',
-      senderId: 'owner-techno-baghdad',
-      title: 'انخفض سعر جهاز في مفضلتك!',
-      body: 'انخفض سعر آيفون 16 برو تيتانيوم إلى 1,650,000 د.ع بدلاً من 1,790,000 د.ع.',
-      type: 'price_drop',
-      relatedId: 'tp-iphone-16-pro',
-      read: false,
-      createdAt: 'اليوم 10:00 ص',
-    },
-  ];
-
-  const seedTradeIns: TradeInRequest[] = [
-    {
-      id: 'TRD-2026-310',
-      storeId: 'store-techno-baghdad',
-      storeOwnerId: 'owner-techno-baghdad',
-      storeName: 'تكنو فون — فرع المنصور الرئيسي',
-      customerId: 'customer-demo',
-      customerName: 'كرار الربيعي',
-      phone: '07714582901',
-      deviceType: 'smartphone',
-      model: 'iPhone 13 Pro',
-      storage: '256 جيجابايت',
-      batteryHealth: 87,
-      conditionNotes: 'نظيف جداً مع الكرتونة الأصلية، بدون خدوش أو فتح صيانة.',
-      imei: '351982047123456',
-      estimatedValue: 620000,
-      offeredValue: 640000,
-      targetProductId: 'tp-iphone-16-pro',
-      targetProductName: 'آيفون 16 برو تيتانيوم',
-      status: 'quoted',
-      storeNotes: 'تقييم ممتاز بعد مراجعة المواصفات؛ العرض سارٍ لمدة 48 ساعة في فرع المنصور.',
-      createdAt: '2026-11-16 16:30',
-    },
-  ];
-
+function buildEmptyState(): DatabaseState {
   return {
-    users: demoUsers,
-    stores: INITIAL_STORES,
-    products: INITIAL_PRODUCTS,
-    bookings: INITIAL_TRACKING_RECORDS,
-    messages: seedMessages,
-    reviews: INITIAL_REVIEWS,
-    wishlists: seedWishlists,
-    notifications: seedNotifications,
-    tradeins: seedTradeIns,
+    users: [],
+    stores: [],
+    products: [],
+    bookings: [],
+    messages: [],
+    reviews: [],
+    wishlists: [],
+    notifications: [],
+    tradeins: [],
   };
 }
 
@@ -261,132 +144,48 @@ export function getDb(): DatabaseState {
   if (fs.existsSync(DB_FILE)) {
     try {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
-      const parsed = JSON.parse(raw) as DatabaseState;
-      const isLegacySeed = parsed.stores.some(
-        (s) => s.id === 'store-techno-riyadh'
-      );
-      if (isLegacySeed) {
-        cachedDb = buildSeedState();
-        saveDb(cachedDb);
-        return cachedDb;
-      }
+      const parsed = JSON.parse(raw) as Partial<DatabaseState>;
 
-      let migrated = false;
-      const seed = buildSeedState();
+      const normalized: DatabaseState = {
+        users: Array.isArray(parsed.users) ? parsed.users : [],
+        stores: Array.isArray(parsed.stores) ? parsed.stores : [],
+        products: Array.isArray(parsed.products) ? parsed.products : [],
+        bookings: Array.isArray(parsed.bookings) ? parsed.bookings : [],
+        messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+        reviews: Array.isArray(parsed.reviews) ? parsed.reviews : [],
+        wishlists: Array.isArray(parsed.wishlists) ? parsed.wishlists : [],
+        notifications: Array.isArray(parsed.notifications)
+          ? parsed.notifications
+          : [],
+        tradeins: Array.isArray(parsed.tradeins) ? parsed.tradeins : [],
+      };
 
-      parsed.stores = parsed.stores.map((store) => {
-        const seeded = INITIAL_STORES.find((s) => s.id === store.id);
-        const coords = seeded
-          ? { lat: seeded.lat, lng: seeded.lng }
-          : getCityCoordinates(store.city);
-        const needsUpdate =
-          typeof store.lat !== 'number' ||
-          typeof store.lng !== 'number' ||
-          !store.verificationStatus ||
-          !Array.isArray(store.technicians);
-        if (needsUpdate) migrated = true;
+      normalized.stores = normalized.stores.map((store) => {
+        const coords = getCityCoordinates(store.city);
         return {
           ...store,
           lat: typeof store.lat === 'number' ? store.lat : coords.lat,
           lng: typeof store.lng === 'number' ? store.lng : coords.lng,
-          district: store.district || seeded?.district || '',
+          district: store.district || '',
+          specialties: Array.isArray(store.specialties) ? store.specialties : [],
           verificationStatus:
             store.verificationStatus || (store.verified ? 'verified' : 'unverified'),
-          avgRating:
-            typeof store.avgRating === 'number'
-              ? store.avgRating
-              : seeded?.avgRating ?? 4.8,
-          reviewCount:
-            typeof store.reviewCount === 'number'
-              ? store.reviewCount
-              : seeded?.reviewCount ?? 0,
-          technicians: Array.isArray(store.technicians)
-            ? store.technicians
-            : seeded?.technicians || [],
-          promoCodes: Array.isArray(store.promoCodes)
-            ? store.promoCodes
-            : seeded?.promoCodes || [],
+          avgRating: typeof store.avgRating === 'number' ? store.avgRating : 5.0,
+          reviewCount: typeof store.reviewCount === 'number' ? store.reviewCount : 0,
+          technicians: Array.isArray(store.technicians) ? store.technicians : [],
+          promoCodes: Array.isArray(store.promoCodes) ? store.promoCodes : [],
         };
       });
 
-      // Backfill enriched seed products & fields
-      for (const seedProd of INITIAL_PRODUCTS) {
-        const idx = parsed.products.findIndex((p) => p.id === seedProd.id);
-        if (idx === -1) {
-          parsed.products.push(seedProd);
-          migrated = true;
-        } else if (
-          seedProd.batteryHealth &&
-          parsed.products[idx].batteryHealth === undefined
-        ) {
-          parsed.products[idx] = { ...seedProd, ...parsed.products[idx] };
-          migrated = true;
-        }
-      }
-
-      // Backfill seed bookings
-      for (const seedBooking of INITIAL_TRACKING_RECORDS) {
-        const idx = parsed.bookings.findIndex((b) => b.id === seedBooking.id);
-        if (idx === -1) {
-          parsed.bookings.push(seedBooking);
-          migrated = true;
-        } else if (
-          seedBooking.warrantyQrCodeData &&
-          !parsed.bookings[idx].warrantyQrCodeData
-        ) {
-          parsed.bookings[idx] = { ...seedBooking, ...parsed.bookings[idx] };
-          migrated = true;
-        }
-      }
-
-      if (!Array.isArray(parsed.reviews)) {
-        parsed.reviews = seed.reviews;
-        migrated = true;
-      }
-      if (!Array.isArray(parsed.wishlists)) {
-        parsed.wishlists = seed.wishlists;
-        migrated = true;
-      }
-      if (!Array.isArray(parsed.notifications)) {
-        parsed.notifications = seed.notifications;
-        migrated = true;
-      }
-      if (!Array.isArray(parsed.tradeins)) {
-        parsed.tradeins = seed.tradeins;
-        migrated = true;
-      }
-
-      parsed.users = parsed.users.map((u) => {
-        if (
-          u.role === 'customer' &&
-          (!u.city || typeof u.lat !== 'number' || typeof u.lng !== 'number')
-        ) {
-          migrated = true;
-          const fallbackCity = u.city || 'بغداد';
-          const coords = getCityCoordinates(fallbackCity);
-          return {
-            ...u,
-            city: fallbackCity,
-            district: u.district || '',
-            lat: typeof u.lat === 'number' ? u.lat : coords.lat,
-            lng: typeof u.lng === 'number' ? u.lng : coords.lng,
-          };
-        }
-        return u;
-      });
-
-      cachedDb = parsed;
-      if (migrated) {
-        saveDb(cachedDb);
-      }
+      cachedDb = normalized;
       return cachedDb;
     } catch {
-      cachedDb = buildSeedState();
+      cachedDb = buildEmptyState();
       saveDb(cachedDb);
       return cachedDb;
     }
   }
-  cachedDb = buildSeedState();
+  cachedDb = buildEmptyState();
   saveDb(cachedDb);
   return cachedDb;
 }

@@ -101,7 +101,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     [governorate]
   );
 
-  const primaryStoreId = items[0]?.product.storeId || 'store-techno-baghdad';
+  const primaryStoreId = items[0]?.product.storeId || stores[0]?.id || '';
   const primaryStore = stores.find((s) => s.id === primaryStoreId);
   const primaryStoreCity = primaryStore?.city || 'بغداد';
 
@@ -167,7 +167,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     const primaryStoreName =
       items[0]?.product.storeName ||
       primaryStore?.name ||
-      'تكنو فون — فرع المنصور الرئيسي';
+      'المتجر المعتمد';
     const maxWarranty = items.reduce(
       (max, it) => Math.max(max, it.product.warrantyMonths || 12),
       12
@@ -525,7 +525,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                     dir="ltr"
                     value={promoInput}
                     onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
-                    placeholder="BAGHDAD10"
+                    placeholder="أدخل كود الخصم"
                     className="flex-1 px-3 py-2 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 font-mono uppercase"
                   />
                   <button

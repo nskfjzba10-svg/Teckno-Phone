@@ -19,7 +19,6 @@ import {
 } from '../data/catalog';
 import {
   apiRequest,
-  readImageFileAsDataUrl,
   setAuthToken,
   uploadMediaFile,
 } from '../lib/api';
@@ -40,6 +39,53 @@ interface AuthScreenProps {
 
 type RoleMode = 'customer' | 'store';
 type AuthAction = 'login' | 'register';
+
+function formatAuthError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err || '');
+  if (!raw) return 'حدث خطأ غير متوقع أثناء التسجيل. يرجى المحاولة مرة أخرى.';
+
+  // Unwrap Firestore JSON error payloads from handleFirestoreError
+  try {
+    const parsed = JSON.parse(raw) as { error?: string };
+    if (parsed && typeof parsed.error === 'string') {
+      const lower = parsed.error.toLowerCase();
+      if (lower.includes('permission-denied') || lower.includes('insufficient permissions')) {
+        return 'تعذر حفظ بيانات الحساب في السحابة بسبب عدم تطابق بعض الحقول المطلوبة. تأكد من إدخال الاسم ورقم الهاتف والعنوان بشكل صحيح.';
+      }
+      if (lower.includes('unavailable') || lower.includes('network')) {
+        return 'تعذر الاتصال بقاعدة البيانات السحابية حالياً. تحقق من اتصال الإنترنت وأعد المحاولة.';
+      }
+      return 'حدث خطأ في المزامنة السحابية للبيانات. يرجى المحاولة مجدداً.';
+    }
+  } catch {
+    // Not a JSON error string
+  }
+
+  const lower = raw.toLowerCase();
+  if (lower.includes('auth/popup-closed-by-user')) {
+    return 'تم إغلاق نافذة تسجيل الدخول عبر Google قبل إتمام العملية.';
+  }
+  if (lower.includes('auth/popup-blocked')) {
+    return 'تم حظر النافذة المنبثقة من المتصفح. يرجى السماح بالنوافذ المنبثقة لهذا الموقع ثم المحاولة مجدداً.';
+  }
+  if (lower.includes('auth/cancelled-popup-request')) {
+    return 'تم إلغاء طلب نافذة تسجيل الدخول. يرجى المحاولة مرة واحدة.';
+  }
+  if (lower.includes('auth/unauthorized-domain')) {
+    return 'النطاق الحالي غير مضاف في إعدادات النطاقات المصرح بها لتسجيل Google، يرجى استخدام التسجيل بالبريد الإلكتروني وكلمة المرور.';
+  }
+  if (lower.includes('auth/network-request-failed')) {
+    return 'تعذر الاتصال بخدمة المصادقة السحابية. تحقق من اتصال الإنترنت.';
+  }
+  if (lower.includes('auth/operation-not-allowed')) {
+    return 'تسجيل الدخول عبر Google غير مفعّل حالياً في إعدادات المشروع. يرجى التسجيل عبر البريد الإلكتروني وكلمة المرور.';
+  }
+  if (lower.includes('auth/account-exists-with-different-credential')) {
+    return 'هذا البريد مسجل مسبقاً بطريقة دخول مختلفة.';
+  }
+
+  return raw;
+}
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({
   theme,
@@ -82,6 +128,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     'بيع الأجهزة الجديدة والمستعملة، الإكسسوارات، صيانة الشاشات والبطاريات'
   );
   const [licenseDocUrl, setLicenseDocUrl] = useState('');
+  const [uploadingLogo, setUploadingLogo] = useState(false);
   const [uploadingLicense, setUploadingLicense] = useState(false);
   const [storeLat, setStoreLat] = useState<number | null>(null);
   const [storeLng, setStoreLng] = useState<number | null>(null);
@@ -106,11 +153,19 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setUploadingLogo(true);
+    setError('');
     try {
-      const dataUrl = await readImageFileAsDataUrl(file);
-      setStoreLogo(dataUrl);
-    } catch {
-      setError('تعذر تحميل ملف الشعار، يرجى اختيار صورة صالحة.');
+      const uploaded = await uploadMediaFile(file);
+      setStoreLogo(uploaded.url);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'تعذر تحميل ملف الشعار، يرجى اختيار صورة صالحة.'
+      );
+    } finally {
+      setUploadingLogo(false);
     }
   };
 
@@ -219,14 +274,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         return;
       }
 
-      setAuthToken(null);
+      setAuthToken(result.token);
       onAuthSuccess(result.user, result.store, result.isNew);
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'تعذر إتمام تسجيل الدخول عبر Google السحابي.'
-      );
+      setError(formatAuthError(err));
     } finally {
       setGoogleLoading(false);
     }
@@ -260,7 +311,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       setAuthToken(res.token);
       onAuthSuccess(res.user, res.store || null, false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'فشل تسجيل الدخول');
+      setError(formatAuthError(err));
     } finally {
       setLoading(false);
     }
@@ -269,6 +320,19 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const handleRegisterCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    if (custName.trim().length < 2) {
+      setError('يرجى إدخال الاسم الكامل (حرفين على الأقل).');
+      return;
+    }
+    if (!custEmail.includes('@')) {
+      setError('يرجى إدخال بريد إلكتروني صحيح.');
+      return;
+    }
+    if (custPassword.length < 6) {
+      setError('كلمة المرور يجب أن تتكون من 6 أحرف على الأقل.');
+      return;
+    }
+
     setLoading(true);
     try {
       const fallbackCoords = getCityCoordinates(custCity);
@@ -277,8 +341,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         {
           method: 'POST',
           body: JSON.stringify({
-            name: custName,
-            email: custEmail,
+            name: custName.trim(),
+            email: custEmail.trim(),
             password: custPassword,
             city: custCity,
             district: custDistrict,
@@ -290,7 +354,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       setAuthToken(res.token);
       onAuthSuccess(res.user, null, true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'تعذر إنشاء حساب الزبون');
+      setError(formatAuthError(err));
     } finally {
       setLoading(false);
     }
@@ -299,6 +363,31 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const handleRegisterStore = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    if (storeName.trim().length < 2) {
+      setError('يرجى إدخال اسم المتجر (حرفين على الأقل).');
+      return;
+    }
+    if (ownerName.trim().length < 2) {
+      setError('يرجى إدخال اسم صاحب أو مدير المتجر.');
+      return;
+    }
+    if (storePhone.replace(/\D/g, '').length < 6) {
+      setError('يرجى إدخال رقم هاتف متجر صحيح (6 أرقام على الأقل).');
+      return;
+    }
+    if (storeAddress.trim().length < 2) {
+      setError('يرجى إدخال العنوان التفصيلي للمتجر.');
+      return;
+    }
+    if (!storeEmail.includes('@')) {
+      setError('يرجى إدخال بريد إلكتروني صحيح للدخول.');
+      return;
+    }
+    if (storePassword.length < 6) {
+      setError('كلمة المرور يجب أن تتكون من 6 أحرف على الأقل.');
+      return;
+    }
+
     setLoading(true);
     try {
       const specialties = storeSpecialtiesText
@@ -314,17 +403,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       }>('/api/auth/register-store', {
         method: 'POST',
         body: JSON.stringify({
-          ownerName,
-          email: storeEmail,
+          ownerName: ownerName.trim(),
+          email: storeEmail.trim(),
           password: storePassword,
-          storeName,
+          storeName: storeName.trim(),
           logo: storeLogo,
           city: storeCity,
           district: storeDistrict,
-          address: storeAddress,
-          phone: storePhone,
-          workingHours: storeHours,
-          description: storeDescription,
+          address: storeAddress.trim(),
+          phone: storePhone.trim(),
+          workingHours: storeHours.trim(),
+          description: storeDescription.trim(),
           specialties,
           licenseDocUrl: licenseDocUrl || undefined,
           lat: storeLat ?? fallbackCoords.lat,
@@ -334,7 +423,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       setAuthToken(res.token);
       onAuthSuccess(res.user, res.store, true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'تعذر إنشاء حساب المتجر');
+      setError(formatAuthError(err));
     } finally {
       setLoading(false);
     }
@@ -348,7 +437,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
       <div className="max-w-3xl w-full mx-auto my-auto space-y-6">
         {/* Platform Title Header */}
-        <div className="text-center space-y-2">
+        <div className="text-center space-y-2.5">
+          <div className="flex justify-center">
+            <img
+              src="/logo.png"
+              alt="شعار تكنو فون"
+              className="w-16 h-16 rounded-2xl object-cover shadow-md border border-slate-200 dark:border-slate-700"
+            />
+          </div>
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-xs font-semibold text-blue-800 dark:text-blue-200">
             <MapPin className="w-3.5 h-3.5" />
             <span>منصة العراق لبيع وصيانة الأجهزة الذكية</span>
@@ -472,8 +568,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                     onChange={(e) => setLoginEmail(e.target.value)}
                     placeholder={
                       roleMode === 'customer'
-                        ? 'customer@technophone.iq'
-                        : 'baghdad@technophone.iq'
+                        ? 'name@example.com'
+                        : 'store@example.com'
                     }
                     className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 rounded-lg text-right focus:outline-none focus:border-blue-700 dark:focus:border-blue-500"
                   />
@@ -517,56 +613,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                     {googleLoading
                       ? 'جاري الاتصال السحابي...'
                       : roleMode === 'customer'
-                        ? 'المتابعة عبر Google (مزامنة سحابية Firestore)'
-                        : 'دخول المتجر عبر Google (مزامنة سحابية)'}
+                        ? 'المتابعة عبر Google'
+                        : 'دخول المتجر عبر Google'}
                   </span>
                 </button>
-
-                {/* Quick Demo Credentials */}
-                <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    حساب تجريبي جاهز (كلمة المرور:{' '}
-                    <span dir="ltr" className="font-mono font-semibold">
-                      123456
-                    </span>
-                    ):
-                  </p>
-                  {roleMode === 'customer' ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setLoginEmail('customer@technophone.iq');
-                        setLoginPassword('123456');
-                      }}
-                      className="px-3.5 py-2 text-xs font-medium text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg cursor-pointer"
-                    >
-                      تعبئة حساب زبون تجريبي (بغداد)
-                    </button>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setLoginEmail('baghdad@technophone.iq');
-                          setLoginPassword('123456');
-                        }}
-                        className="px-3 py-2 text-xs font-medium text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg cursor-pointer"
-                      >
-                        متجر تكنو فون (بغداد)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setLoginEmail('basra@spectrum.iq');
-                          setLoginPassword('123456');
-                        }}
-                        className="px-3 py-2 text-xs font-medium text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg cursor-pointer"
-                      >
-                        متجر سبيكتروم (البصرة)
-                      </button>
-                    </div>
-                  )}
-                </div>
               </form>
             )}
 
@@ -666,7 +716,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                     required
                     value={custEmail}
                     onChange={(e) => setCustEmail(e.target.value)}
-                    placeholder="name@example.iq"
+                    placeholder="name@example.com"
                     className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 rounded-lg text-right focus:outline-none focus:border-blue-700 dark:focus:border-blue-500"
                   />
                 </div>
@@ -699,6 +749,20 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                       : 'إنشاء حساب زبون وعرض المتاجر القريبة'}
                   </span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  disabled={googleLoading}
+                  className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg cursor-pointer min-h-[44px]"
+                >
+                  <Cloud className="w-4 h-4 text-blue-700 dark:text-blue-400" />
+                  <span>
+                    {googleLoading
+                      ? 'جاري التسجيل عبر Google...'
+                      : 'التسجيل السريع عبر Google كزبون'}
+                  </span>
+                </button>
               </form>
             )}
 
@@ -728,7 +792,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                     <div className="space-y-2.5 flex-1">
                       <label className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg cursor-pointer">
                         <Upload className="w-4 h-4" />
-                        <span>رفع صورة شعار المتجر من جهازك</span>
+                        <span>
+                          {uploadingLogo
+                            ? 'جاري رفع الشعار...'
+                            : 'رفع صورة شعار المتجر من جهازك'}
+                        </span>
                         <input
                           type="file"
                           accept="image/*"
@@ -967,7 +1035,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                       required
                       value={storeEmail}
                       onChange={(e) => setStoreEmail(e.target.value)}
-                      placeholder="owner@mystore.iq"
+                      placeholder="store@example.com"
                       className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 rounded-lg text-right focus:outline-none focus:border-blue-700 dark:focus:border-blue-500"
                     />
                   </div>
@@ -990,7 +1058,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={loading || uploadingLogo || uploadingLicense}
                   className="w-full inline-flex items-center justify-center gap-2 py-3 px-5 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 disabled:opacity-60 rounded-lg cursor-pointer min-h-[46px]"
                 >
                   <Store className="w-4 h-4" />
@@ -998,6 +1066,20 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                     {loading
                       ? 'جاري رفع بيانات المتجر...'
                       : 'رفع بيانات المتجر والدخول للوحة الإدارة'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  disabled={googleLoading || uploadingLogo || uploadingLicense}
+                  className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg cursor-pointer min-h-[44px]"
+                >
+                  <Cloud className="w-4 h-4 text-blue-700 dark:text-blue-400" />
+                  <span>
+                    {googleLoading
+                      ? 'جاري تسجيل المتجر عبر Google...'
+                      : 'تسجيل المتجر السريع عبر Google'}
                   </span>
                 </button>
               </form>

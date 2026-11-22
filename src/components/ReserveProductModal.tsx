@@ -436,7 +436,7 @@ export const ReserveProductModal: React.FC<ReserveProductModalProps> = ({
                     dir="ltr"
                     value={promoInput}
                     onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
-                    placeholder="BAGHDAD10"
+                    placeholder="أدخل كود الخصم"
                     className="flex-1 px-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-mono uppercase text-slate-900 dark:text-slate-100"
                   />
                   <button

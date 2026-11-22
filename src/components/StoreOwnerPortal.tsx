@@ -27,7 +27,7 @@ import {
   formatCurrency,
   getGovernorateDistricts,
 } from '../data/catalog';
-import { apiRequest, readImageFileAsDataUrl, uploadMediaFile } from '../lib/api';
+import { apiRequest, uploadMediaFile } from '../lib/api';
 import {
   AuthUser,
   ChatMessage,
@@ -89,16 +89,18 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
   const [district, setDistrict] = useState(
     store.district || getGovernorateDistricts(store.city || 'بغداد')[0] || ''
   );
-  const [address, setAddress] = useState(store.address);
-  const [phone, setPhone] = useState(store.phone);
-  const [workingHours, setWorkingHours] = useState(store.workingHours);
-  const [description, setDescription] = useState(store.description);
+  const [address, setAddress] = useState(store.address || '');
+  const [phone, setPhone] = useState(store.phone || '');
+  const [workingHours, setWorkingHours] = useState(
+    store.workingHours || '10:00 صباحاً – 11:00 مساءً'
+  );
+  const [description, setDescription] = useState(store.description || '');
   const [specialtiesText, setSpecialtiesText] = useState(
-    store.specialties.join('، ')
+    (store.specialties || []).join('، ')
   );
   const [licenseDocUrl, setLicenseDocUrl] = useState(store.licenseDocUrl || '');
-  const [lat, setLat] = useState<number>(store.lat);
-  const [lng, setLng] = useState<number>(store.lng);
+  const [lat, setLat] = useState<number>(store.lat ?? 33.3152);
+  const [lng, setLng] = useState<number>(store.lng ?? 44.3661);
   const [profileSaved, setProfileSaved] = useState(false);
 
   // Technicians & Promo Codes
@@ -250,10 +252,14 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
     if (!file) return;
     setStatusError('');
     try {
-      const url = await readImageFileAsDataUrl(file);
-      setter(url);
-    } catch {
-      setStatusError('تعذر قراءة ملف الصورة');
+      const uploaded = await uploadMediaFile(file);
+      setter(uploaded.url);
+    } catch (err) {
+      setStatusError(
+        err instanceof Error ? err.message : 'تعذر رفع ملف الصورة'
+      );
+    } finally {
+      e.target.value = '';
     }
   };
 
@@ -778,11 +784,14 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
                 </h2>
 
                 {(() => {
-                  const totalRev = Math.max(1, analytics?.totalRevenue ?? 1);
-                  const salesPct = Math.round(
-                    ((analytics?.salesRevenue ?? 0) / totalRev) * 100
-                  );
-                  const repairPct = 100 - salesPct;
+                  const totalRev = analytics?.totalRevenue ?? 0;
+                  const salesPct =
+                    totalRev > 0
+                      ? Math.round(
+                          ((analytics?.salesRevenue ?? 0) / totalRev) * 100
+                        )
+                      : 0;
+                  const repairPct = totalRev > 0 ? 100 - salesPct : 0;
                   return (
                     <div className="space-y-3">
                       <div className="space-y-1">

@@ -551,18 +551,24 @@ export const StoreSection: React.FC<StoreSectionProps> = ({
         {filteredProducts.length === 0 ? (
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-12 text-center">
             <p className="text-base font-semibold text-slate-900 dark:text-slate-100 mb-2">
-              لا توجد منتجات مطابقة لمعايير التصفية المحددة
+              {storeScopedProducts.length === 0
+                ? 'لا توجد منتجات معروضة للبيع حالياً'
+                : 'لا توجد منتجات مطابقة لمعايير التصفية المحددة'}
             </p>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-5">
-              جرّب تغيير المحافظة أو نوع الجهاز أو توسيع نطاق السعر.
+              {storeScopedProducts.length === 0
+                ? 'ستظهر المنتجات الحقيقية هنا فور نشرها من قبل المتاجر المسجلة.'
+                : 'جرّب تغيير المحافظة أو نوع الجهاز أو توسيع نطاق السعر.'}
             </p>
-            <button
-              type="button"
-              onClick={resetAllFilters}
-              className="px-5 py-2.5 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer"
-            >
-              عرض جميع المنتجات المعروضة للبيع
-            </button>
+            {storeScopedProducts.length > 0 && hasActiveFilters && (
+              <button
+                type="button"
+                onClick={resetAllFilters}
+                className="px-5 py-2.5 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer"
+              >
+                عرض جميع المنتجات المعروضة للبيع
+              </button>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

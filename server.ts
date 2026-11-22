@@ -222,7 +222,17 @@ async function startServer() {
     const found = db.users.find(
       (u) => u.email.toLowerCase() === email.trim().toLowerCase()
     );
-    if (!found || !verifyPassword(password, found.passwordHash)) {
+    if (!found) {
+      res.status(401).json({ error: 'بيانات الدخول غير صحيحة' });
+      return;
+    }
+    if (!found.passwordHash && found.authProvider === 'firebase') {
+      res.status(401).json({
+        error: 'هذا الحساب مسجل عبر Google. يرجى الضغط على زر المتابعة عبر Google للدخول.',
+      });
+      return;
+    }
+    if (!verifyPassword(password, found.passwordHash)) {
       res.status(401).json({ error: 'بيانات الدخول غير صحيحة' });
       return;
     }
@@ -237,7 +247,7 @@ async function startServer() {
       district: found.district,
       lat: found.lat,
       lng: found.lng,
-      authProvider: 'local',
+      authProvider: found.authProvider || 'local',
     };
     const token = createSessionToken(authUser);
     const store =
@@ -247,6 +257,319 @@ async function startServer() {
 
     res.json({ token, user: authUser, store });
   });
+
+  app.post(
+    '/api/auth/firebase-session',
+    async (req: Request, res: Response) => {
+      const body = req.body as {
+        idToken?: string;
+        role?: 'customer' | 'store_owner';
+        governorate?: string;
+        district?: string;
+        storeDraft?: {
+          storeName?: string;
+          logo?: string;
+          city?: string;
+          district?: string;
+          address?: string;
+          phone?: string;
+          workingHours?: string;
+          description?: string;
+          specialties?: string[];
+          licenseDocUrl?: string;
+          lat?: number;
+          lng?: number;
+        };
+      };
+
+      if (!body.idToken) {
+        res.status(400).json({ error: 'رمز التحقق من Google مفقود.' });
+        return;
+      }
+
+      const firebaseConfigPath = path.resolve(
+        process.cwd(),
+        'firebase-applet-config.json'
+      );
+      if (!fs.existsSync(firebaseConfigPath)) {
+        res.status(500).json({ error: 'إعدادات Firebase غير متوفرة على الخادم.' });
+        return;
+      }
+
+      let apiKey = '';
+      try {
+        const parsedCfg = JSON.parse(
+          fs.readFileSync(firebaseConfigPath, 'utf-8')
+        ) as { apiKey?: string };
+        apiKey = parsedCfg.apiKey || '';
+      } catch {
+        res.status(500).json({ error: 'تعذر قراءة إعدادات Firebase.' });
+        return;
+      }
+
+      if (!apiKey) {
+        res.status(500).json({ error: 'مفتاح Firebase API غير مضبوط.' });
+        return;
+      }
+
+      let verifiedUid = '';
+      let verifiedEmail = '';
+      let verifiedName = '';
+
+      try {
+        const verifyRes = await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ idToken: body.idToken }),
+          }
+        );
+        const verifyData = (await verifyRes.json().catch(() => ({}))) as {
+          users?: Array<{
+            localId?: string;
+            email?: string;
+            displayName?: string;
+          }>;
+          error?: { message?: string };
+        };
+        const fbUserInfo = verifyData.users?.[0];
+        if (!verifyRes.ok || !fbUserInfo?.localId || !fbUserInfo?.email) {
+          res.status(401).json({
+            error: 'تعذر التحقق من جلسة Google. يرجى إعادة المحاولة.',
+          });
+          return;
+        }
+        verifiedUid = fbUserInfo.localId.replace(/[^a-zA-Z0-9_-]/g, '-');
+        verifiedEmail = fbUserInfo.email.trim().toLowerCase();
+        verifiedName = (fbUserInfo.displayName || '').trim();
+      } catch {
+        res.status(502).json({
+          error: 'تعذر الاتصال بخدمة التحقق من حساب Google.',
+        });
+        return;
+      }
+
+      const requestedRole: 'customer' | 'store_owner' =
+        body.role === 'store_owner' ? 'store_owner' : 'customer';
+
+      const db = getDb();
+      let found = db.users.find(
+        (u) =>
+          u.id === verifiedUid ||
+          u.email.toLowerCase() === verifiedEmail.toLowerCase()
+      );
+
+      if (found) {
+        if (found.role !== requestedRole) {
+          res.status(409).json({
+            error:
+              found.role === 'store_owner'
+                ? 'حساب Google هذا مسجل كمتجر مسبقاً. يرجى الدخول من تبويب متجر.'
+                : 'حساب Google هذا مسجل كزبون مسبقاً. يرجى التحويل إلى تبويب زبون.',
+          });
+          return;
+        }
+
+        let store =
+          found.role === 'store_owner' && found.storeId
+            ? db.stores.find((s) => s.id === found?.storeId) || null
+            : null;
+
+        // If store owner exists but store record missing, recreate it safely
+        if (found.role === 'store_owner' && !store) {
+          const storeId =
+            found.storeId || `store-${verifiedUid.slice(0, 10)}`;
+          const gov = body.storeDraft?.city || body.governorate || 'بغداد';
+          const coords = getCityCoordinates(gov);
+          store = {
+            id: storeId,
+            ownerId: found.id,
+            name:
+              body.storeDraft?.storeName?.trim() ||
+              `متجر ${found.name}`,
+            logo:
+              body.storeDraft?.logo?.trim() ||
+              '/src/assets/images/product_titanium_phone_1794983260872.jpg',
+            city: gov,
+            district: body.storeDraft?.district || body.district || 'المركز',
+            address:
+              body.storeDraft?.address?.trim() || `${gov} — المركز التجاري`,
+            phone: body.storeDraft?.phone?.trim() || '07700000000',
+            workingHours:
+              body.storeDraft?.workingHours?.trim() ||
+              '10:00 صباحاً – 10:30 مساءً',
+            description:
+              body.storeDraft?.description?.trim() ||
+              'متجر متخصص في بيع وصيانة الأجهزة الذكية في العراق.',
+            specialties:
+              Array.isArray(body.storeDraft?.specialties) &&
+              body.storeDraft.specialties.length > 0
+                ? body.storeDraft.specialties
+                : ['بيع الأجهزة الذكية', 'صيانة معتمدة'],
+            lat:
+              typeof body.storeDraft?.lat === 'number' &&
+              Number.isFinite(body.storeDraft.lat)
+                ? body.storeDraft.lat
+                : coords.lat,
+            lng:
+              typeof body.storeDraft?.lng === 'number' &&
+              Number.isFinite(body.storeDraft.lng)
+                ? body.storeDraft.lng
+                : coords.lng,
+            verified: false,
+            verificationStatus: body.storeDraft?.licenseDocUrl
+              ? 'pending'
+              : 'unverified',
+            licenseDocUrl: body.storeDraft?.licenseDocUrl || undefined,
+            avgRating: 5.0,
+            reviewCount: 0,
+            technicians: [
+              {
+                id: `tech-${Date.now().toString(36)}`,
+                name: found.name,
+                specialty: 'الإدارة والصيانة العامة',
+              },
+            ],
+            promoCodes: [],
+            createdAt: nowDateTimeLabel(),
+          };
+          found.storeId = storeId;
+          db.stores.unshift(store);
+          saveDb(db);
+        }
+
+        const authUser: AuthUser = {
+          id: found.id,
+          name: found.name,
+          email: found.email,
+          role: found.role,
+          storeId: found.storeId,
+          city: found.city,
+          district: found.district,
+          lat: found.lat,
+          lng: found.lng,
+          authProvider: 'firebase',
+        };
+        const token = createSessionToken(authUser);
+        res.json({ token, user: authUser, store, isNew: false });
+        return;
+      }
+
+      // Create brand new Firebase-backed user + optional store in backend DB
+      const gov =
+        body.storeDraft?.city?.trim() ||
+        body.governorate?.trim() ||
+        'بغداد';
+      const dist =
+        body.storeDraft?.district?.trim() || body.district?.trim() || '';
+      const coords = getCityCoordinates(gov);
+      const displayName =
+        verifiedName.length >= 2
+          ? verifiedName
+          : body.storeDraft?.storeName?.trim() ||
+            verifiedEmail.split('@')[0] ||
+            'مستخدم تكنو فون';
+
+      let storeId: string | undefined;
+      let createdStore: StoreProfile | null = null;
+
+      if (requestedRole === 'store_owner') {
+        storeId = `store-${verifiedUid.slice(0, 10)}`;
+        const draft = body.storeDraft;
+        const hasDoc = Boolean(draft?.licenseDocUrl?.trim());
+        createdStore = {
+          id: storeId,
+          ownerId: verifiedUid,
+          name:
+            draft?.storeName?.trim() && draft.storeName.trim().length >= 2
+              ? draft.storeName.trim()
+              : `متجر ${displayName}`,
+          logo:
+            draft?.logo?.trim() ||
+            '/src/assets/images/product_titanium_phone_1794983260872.jpg',
+          city: gov,
+          district: dist || 'المركز',
+          address:
+            draft?.address?.trim() && draft.address.trim().length >= 2
+              ? draft.address.trim()
+              : `${gov} — المركز التجاري`,
+          phone:
+            draft?.phone?.trim() && draft.phone.trim().length >= 6
+              ? draft.phone.trim()
+              : '07700000000',
+          workingHours:
+            draft?.workingHours?.trim() || '10:00 صباحاً – 10:30 مساءً',
+          description:
+            draft?.description?.trim() ||
+            'متجر متخصص في بيع وصيانة الأجهزة الذكية في العراق.',
+          specialties:
+            Array.isArray(draft?.specialties) && draft.specialties.length > 0
+              ? draft.specialties
+              : ['بيع الأجهزة الذكية', 'صيانة معتمدة'],
+          lat:
+            typeof draft?.lat === 'number' && Number.isFinite(draft.lat)
+              ? draft.lat
+              : coords.lat,
+          lng:
+            typeof draft?.lng === 'number' && Number.isFinite(draft.lng)
+              ? draft.lng
+              : coords.lng,
+          verified: false,
+          verificationStatus: hasDoc ? 'pending' : 'unverified',
+          licenseDocUrl: draft?.licenseDocUrl?.trim() || undefined,
+          avgRating: 5.0,
+          reviewCount: 0,
+          technicians: [
+            {
+              id: `tech-${Date.now().toString(36)}`,
+              name: displayName,
+              specialty: 'الإدارة والصيانة العامة',
+            },
+          ],
+          promoCodes: [],
+          createdAt: nowDateTimeLabel(),
+        };
+        db.stores.unshift(createdStore);
+      }
+
+      const newUser = {
+        id: verifiedUid,
+        name: displayName,
+        email: verifiedEmail,
+        passwordHash: '',
+        role: requestedRole,
+        storeId,
+        city: gov,
+        district: dist,
+        lat: coords.lat,
+        lng: coords.lng,
+        authProvider: 'firebase' as const,
+      };
+      db.users.push(newUser);
+      saveDb(db);
+
+      const authUser: AuthUser = {
+        id: newUser.id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+        storeId: newUser.storeId,
+        city: newUser.city,
+        district: newUser.district,
+        lat: newUser.lat,
+        lng: newUser.lng,
+        authProvider: 'firebase',
+      };
+      const token = createSessionToken(authUser);
+      res.status(201).json({
+        token,
+        user: authUser,
+        store: createdStore,
+        isNew: true,
+      });
+    }
+  );
 
   app.post('/api/auth/register-store', (req: Request, res: Response) => {
     const body = req.body as {
@@ -277,7 +600,14 @@ async function startServer() {
       !body.phone?.trim()
     ) {
       res.status(400).json({
-        error: 'يرجى استكمال جميع البيانات الأساسية لحساب المتجر والشعار والموقع.',
+        error: 'يرجى استكمال جميع البيانات الأساسية لحساب المتجر والموقع ورقم الهاتف.',
+      });
+      return;
+    }
+
+    if (body.password.length < 6) {
+      res.status(400).json({
+        error: 'يجب أن تتكون كلمة المرور من 6 أحرف على الأقل.',
       });
       return;
     }
@@ -342,6 +672,7 @@ async function startServer() {
       passwordHash: hashPassword(body.password),
       role: 'store_owner' as const,
       storeId,
+      authProvider: 'local' as const,
     };
 
     db.users.push(newUser);
@@ -375,6 +706,12 @@ async function startServer() {
       res.status(400).json({ error: 'يرجى إدخال الاسم والبريد وكلمة المرور' });
       return;
     }
+    if (password.length < 6) {
+      res.status(400).json({
+        error: 'يجب أن تتكون كلمة المرور من 6 أحرف على الأقل.',
+      });
+      return;
+    }
     const db = getDb();
     const emailNorm = email.trim().toLowerCase();
     if (db.users.some((u) => u.email.toLowerCase() === emailNorm)) {
@@ -398,6 +735,7 @@ async function startServer() {
       district: district?.trim() || '',
       lat: resolvedLat,
       lng: resolvedLng,
+      authProvider: 'local' as const,
     };
     db.users.push(newUser);
     saveDb(db);
@@ -1411,14 +1749,37 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distDir));
-    app.get('*', (_req: Request, res: Response) => {
-      const indexHtml = path.join(distDir, 'index.html');
-      if (fs.existsSync(indexHtml)) {
-        res.sendFile(indexHtml);
-      } else {
+    app.use(express.static(distDir, { index: false }));
+    app.get('*', (req: Request, res: Response) => {
+      const indexHtmlPath = path.join(distDir, 'index.html');
+      if (!fs.existsSync(indexHtmlPath)) {
         res.status(404).send('Build not found');
+        return;
       }
+      const protoHeader = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
+        .split(',')[0]
+        .trim();
+      const host = req.get('host');
+      const fallbackOrigin = host ? `${protoHeader}://${host}` : '';
+      const baseUrl = (process.env.APP_URL && process.env.APP_URL !== 'MY_APP_URL'
+        ? process.env.APP_URL
+        : fallbackOrigin
+      ).replace(/\/+$/, '');
+
+      let html = fs.readFileSync(indexHtmlPath, 'utf-8');
+      if (baseUrl) {
+        const logoUrl = `${baseUrl}/logo.png`;
+        const safePath = req.originalUrl.replace(/["'<>]/g, '');
+        const fullUrl = `${baseUrl}${safePath}`;
+        html = html
+          .replace(/content="\/logo\.png"/g, `content="${logoUrl}"`)
+          .replace(/"\/logo\.png"/g, `"${logoUrl}"`)
+          .replace(
+            '</head>',
+            `    <link rel="canonical" href="${fullUrl}" />\n    <meta property="og:url" content="${fullUrl}" />\n  </head>`
+          );
+      }
+      res.type('html').send(html);
     });
   }
 

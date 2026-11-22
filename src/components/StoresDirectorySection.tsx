@@ -153,16 +153,22 @@ export const StoresDirectorySection: React.FC<StoresDirectorySectionProps> = ({
         s.name.toLowerCase().includes(q) ||
         s.city.toLowerCase().includes(q) ||
         (s.district || '').toLowerCase().includes(q) ||
-        s.address.toLowerCase().includes(q) ||
-        s.specialties.some((sp) => sp.toLowerCase().includes(q));
+        (s.address || '').toLowerCase().includes(q) ||
+        (s.specialties || []).some((sp) => sp.toLowerCase().includes(q));
       return matchCity && matchDistrict && matchQuery;
     });
 
     if (userLocation) {
       return [...list].sort(
         (a, b) =>
-          calculateDistanceKm(userLocation, { lat: a.lat, lng: a.lng }) -
-          calculateDistanceKm(userLocation, { lat: b.lat, lng: b.lng })
+          calculateDistanceKm(userLocation, {
+            lat: a.lat ?? 33.3152,
+            lng: a.lng ?? 44.3661,
+          }) -
+          calculateDistanceKm(userLocation, {
+            lat: b.lat ?? 33.3152,
+            lng: b.lng ?? 44.3661,
+          })
       );
     }
     return list;
@@ -233,8 +239,8 @@ export const StoresDirectorySection: React.FC<StoresDirectorySectionProps> = ({
                       <span className="text-emerald-700 dark:text-emerald-400 font-semibold tabular-nums">
                         على بُعد{' '}
                         {calculateDistanceKm(userLocation, {
-                          lat: selectedStore.lat,
-                          lng: selectedStore.lng,
+                          lat: selectedStore.lat ?? 33.3152,
+                          lng: selectedStore.lng ?? 44.3661,
                         }).toFixed(1)}{' '}
                         كم
                       </span>
@@ -491,10 +497,14 @@ export const StoresDirectorySection: React.FC<StoresDirectorySectionProps> = ({
         {filteredStores.length === 0 ? (
           <div className="bg-[#F8F9FA] dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center space-y-2">
             <p className="text-base font-bold text-slate-900 dark:text-slate-100">
-              لا توجد متاجر مطابقة في هذا القضاء حالياً
+              {stores.length === 0
+                ? 'لا توجد متاجر مسجلة في المنصة حتى الآن'
+                : 'لا توجد متاجر مطابقة في هذا القضاء حالياً'}
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              جرّب عرض كل الأقضية في المحافظة أو اختيار محافظة أخرى.
+              {stores.length === 0
+                ? 'عند تسجيل أصحاب المتاجر حساباتهم وإضافة متاجرهم ستظهر هنا مباشرة.'
+                : 'جرّب عرض كل الأقضية في المحافظة أو اختيار محافظة أخرى.'}
             </p>
           </div>
         ) : (
@@ -503,8 +513,8 @@ export const StoresDirectorySection: React.FC<StoresDirectorySectionProps> = ({
               const count = products.filter((p) => p.storeId === store.id).length;
               const distanceKm = userLocation
                 ? calculateDistanceKm(userLocation, {
-                    lat: store.lat,
-                    lng: store.lng,
+                    lat: store.lat ?? 33.3152,
+                    lng: store.lng ?? 44.3661,
                   })
                 : null;
               const deliveryEst = estimateDeliveryBetweenGovernorates(
@@ -594,7 +604,7 @@ export const StoresDirectorySection: React.FC<StoresDirectorySectionProps> = ({
                         <span>{store.workingHours}</span>
                       </span>
                       <span className="text-slate-500 dark:text-slate-400 truncate">
-                        {store.specialties.join(' · ')}
+                        {(store.specialties || []).join(' · ')}
                       </span>
                     </div>
                   </div>
