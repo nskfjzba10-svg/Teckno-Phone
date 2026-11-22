@@ -49,7 +49,7 @@ export const CompareBarAndModal: React.FC<CompareBarAndModalProps> = ({
     <>
       {/* Slim bottom compare bar */}
       {compareItems.length > 0 && !isModalOpen && (
-        <div className="fixed bottom-4 inset-x-4 z-40 max-w-4xl mx-auto bg-slate-900 dark:bg-slate-800 text-white rounded-xl shadow-xl border border-slate-700 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="fixed bottom-[4.25rem] md:bottom-4 inset-x-3 sm:inset-x-4 z-30 max-w-4xl mx-auto bg-slate-900 dark:bg-slate-800 text-white rounded-xl shadow-xl border border-slate-700 px-3.5 sm:px-4 py-2.5 sm:py-3 flex flex-wrap items-center justify-between gap-2.5 sm:gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <GitCompare className="w-4 h-4 text-blue-400 shrink-0" />
             <div className="flex items-center gap-2 text-xs sm:text-sm truncate">

@@ -4,7 +4,9 @@ import { CartDrawer } from './components/CartDrawer';
 import { CompareBarAndModal } from './components/CompareBarAndModal';
 import { CustomerOrdersAndWarrantyView } from './components/CustomerOrdersAndWarrantyView';
 import { Footer } from './components/Footer';
-import { CustomerView, Header } from './components/Header';
+import { Header, CustomerView } from './components/Header';
+import { MobileBottomNav } from './components/MobileBottomNav';
+import { OfflineIndicator } from './components/OfflineIndicator';
 import { ProductModal } from './components/ProductModal';
 import { RepairSection } from './components/RepairSection';
 import { ReserveProductModal } from './components/ReserveProductModal';
@@ -735,7 +737,11 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F8F9FA] dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors">
+    <div
+      className={`min-h-screen flex flex-col bg-[#F8F9FA] dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors ${
+        !isStoreOwner ? 'pb-16 md:pb-0' : ''
+      }`}
+    >
       <Header
         cartCount={totalCartCount}
         wishlistCount={wishlistItems.length}
@@ -940,8 +946,20 @@ export default function App() {
             record={warrantyCardRecord}
             onClose={() => setWarrantyCardRecord(null)}
           />
+
+          <MobileBottomNav
+            activeView={customerView}
+            onSelectView={(view) => {
+              if (view !== 'stores') {
+                setJustRegisteredCustomer(false);
+              }
+              setCustomerView(view);
+            }}
+          />
         </>
       )}
+
+      <OfflineIndicator />
     </div>
   );
 }

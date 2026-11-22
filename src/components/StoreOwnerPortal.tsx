@@ -889,7 +889,7 @@ export const StoreOwnerPortal: React.FC<StoreOwnerPortalProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-4 sm:gap-6 text-center border-t sm:border-t-0 pt-4 sm:pt-0 border-slate-200 dark:border-slate-800">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-6 text-center border-t sm:border-t-0 pt-4 sm:pt-0 border-slate-200 dark:border-slate-800">
             <div>
               <div className="text-lg font-bold text-slate-900 dark:text-slate-100 tabular-nums">
                 {products.length}

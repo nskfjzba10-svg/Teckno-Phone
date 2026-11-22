@@ -20,6 +20,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { AuthUser, NotificationItem, ProductCategory } from '../types';
+import { PWAInstallButton } from './PWAInstallButton';
 import { ConditionFilter } from './StoreSection';
 import { ThemeMode, ThemeToggle } from './ThemeToggle';
 
@@ -271,10 +272,10 @@ export const Header: React.FC<HeaderProps> = ({
     menuOptions.find((o) => o.isActive)?.label || 'الأصناف';
 
   return (
-    <header className="sticky top-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-800 transition-colors">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+    <header className="sticky top-0 z-40 pt-safe bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 transition-colors">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between gap-2 sm:gap-3">
         {/* Top-Right Corner (الجهة اليمنى العلوية in RTL): Categories Menu Button + Brand */}
-        <div className="flex items-center gap-3 sm:gap-4">
+        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
           {!isStoreOwner && (
             <div ref={menuContainerRef} className="relative">
               <button
@@ -282,7 +283,7 @@ export const Header: React.FC<HeaderProps> = ({
                 onClick={() => setCategoriesOpen((prev) => !prev)}
                 aria-expanded={categoriesOpen}
                 aria-haspopup="menu"
-                className={`inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer min-h-[40px] ${
+                className={`inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer min-h-[40px] ${
                   categoriesOpen
                     ? 'bg-blue-700 text-white border-blue-700'
                     : 'bg-slate-900 dark:bg-blue-700 hover:bg-blue-700 dark:hover:bg-blue-600 text-white border-slate-900 dark:border-blue-700 hover:border-blue-700'
@@ -301,7 +302,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <div
                   role="menu"
                   aria-label="قائمة الأصناف والخدمات"
-                  className="absolute right-0 top-full mt-2 w-72 sm:w-80 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl py-2 z-50"
+                  className="absolute right-0 top-full mt-2 w-[min(20rem,calc(100vw-1.5rem))] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl py-2 z-50"
                 >
                   <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
                     <span className="font-semibold text-slate-900 dark:text-slate-100">
@@ -395,8 +396,9 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </div>
 
-        {/* Top-Left Actions (Theme Toggle, Notifications, Wishlist, Cart, Logout) */}
-        <div className="flex items-center gap-2 shrink-0">
+        {/* Top-Left Actions (Install App, Theme Toggle, Notifications, Wishlist, Cart, Logout) */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <PWAInstallButton variant="header" />
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
 
           {!isStoreOwner && (
@@ -418,7 +420,7 @@ export const Header: React.FC<HeaderProps> = ({
                 </button>
 
                 {notifOpen && (
-                  <div className="absolute left-0 top-full mt-2 w-80 sm:w-96 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl z-50 overflow-hidden">
+                  <div className="fixed sm:absolute left-3 right-3 sm:left-0 sm:right-auto top-[60px] sm:top-full sm:mt-2 w-auto sm:w-96 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl z-50 overflow-hidden">
                     <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
                       <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
                         التنبيهات الفورية ({unreadCount} غير مقروءة)

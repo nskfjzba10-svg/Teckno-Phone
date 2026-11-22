@@ -28,6 +28,7 @@ import {
   signInWithGoogleRole,
 } from '../lib/cloudSync';
 import { AuthUser, StoreProfile } from '../types';
+import { PWAInstallButton } from './PWAInstallButton';
 import { SafeImage } from './SafeImage';
 import { ThemeMode, ThemeToggle } from './ThemeToggle';
 
@@ -442,12 +443,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col py-8 px-4 sm:px-6 lg:px-8 transition-colors">
-      <div className="max-w-3xl w-full mx-auto flex justify-end mb-4">
+    <div className="min-h-screen bg-[#F8F9FA] dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col py-4 sm:py-8 px-3 sm:px-6 lg:px-8 transition-colors pb-safe pt-safe">
+      <div className="max-w-3xl w-full mx-auto flex items-center justify-between gap-2 mb-4">
+        <PWAInstallButton variant="card" className="min-h-[40px] py-1.5 px-3" />
         <ThemeToggle theme={theme} onToggle={onToggleTheme} showLabel />
       </div>
 
-      <div className="max-w-3xl w-full mx-auto my-auto space-y-6">
+      <div className="max-w-3xl w-full mx-auto my-auto space-y-5 sm:space-y-6">
         {/* Platform Title Header */}
         <div className="text-center space-y-2.5">
           <div className="flex justify-center">
